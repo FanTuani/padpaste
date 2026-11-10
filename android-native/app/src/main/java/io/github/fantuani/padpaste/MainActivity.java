@@ -83,19 +83,20 @@ public final class MainActivity extends Activity {
         else requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},103);
     }
     private void checkConnection(){
-        if(checking)return;Config c=new Config(this);if(!c.valid()){connectionTitle.setText("等待配对");connectionSubtitle.setText("导入 Mac 生成的配对文件");return;}
+        if(checking)return;lastCheck=System.currentTimeMillis();Config c=new Config(this);if(!c.valid()){render();return;}
         checking=true;lastCheck=System.currentTimeMillis();connectionTitle.setText("正在检测…");
         network.execute(()->{try{MacClient.check(c);SyncState.connection(this,true,"");}catch(Exception e){SyncState.connection(this,false,SyncService.friendly(e));}finally{checking=false;runOnUiThread(this::render);}});
     }
     private String clock(long ms){return new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date(ms));}
+    private void label(TextView view,String value){if(!view.getText().toString().equals(value))view.setText(value);}
     private void render(){
         android.content.SharedPreferences p=Config.prefs(this);long confirmed=p.getLong("last_confirmed",0);boolean connected=p.getBoolean("connected",false)&&System.currentTimeMillis()-confirmed<90000;
-        if(!checking){connectionTitle.setText(connected?"● 已连接到 Mac":new Config(this).valid()?"○ 等待 Mac 连接":"等待配对");connectionTitle.setTextColor(connected?GREEN:INK);connectionSubtitle.setText(connected?new Config(this).server+"\n最近确认 "+clock(confirmed):p.getString("connection_error","点击检测连接"));}
-        monitorTitle.setText(SyncState.running?SyncState.phase+(SyncState.pending>0?" · 排队 "+SyncState.pending:""):p.getBoolean("enabled",false)?"等待恢复监控":"截图监控已暂停");
-        rendering=true;enabled.setChecked(p.getBoolean("enabled",false));rendering=false;
-        long last=p.getLong("last_upload",0);lastTransfer.setText(last>0?"最近同步  "+clock(last)+"  ·  上传与接收 "+p.getLong("last_duration",0)+" ms":"还没有同步记录");
-        String error=p.getString("last_error","");errorText.setText(error.isEmpty()?"":"上次同步错误："+error);
-        permissionText.setText((SyncService.filesAllowed(this)?"✓ 文件访问已授权":"需要文件访问权限以读取新截图")+"\n请开启后台自启动，并将省电策略设为无限制。");
+        if(!checking){label(connectionTitle,connected?"● 已连接到 Mac":new Config(this).valid()?"○ 等待 Mac 连接":"等待配对");connectionTitle.setTextColor(connected?GREEN:INK);label(connectionSubtitle,connected?new Config(this).server+"\n最近确认 "+clock(confirmed):new Config(this).valid()?p.getString("connection_error","点击检测连接"):"导入 Mac 生成的配对文件");}
+        label(monitorTitle,SyncState.running?SyncState.phase+(SyncState.pending>0?" · 排队 "+SyncState.pending:""):p.getBoolean("enabled",false)?"等待恢复监控":"截图监控已暂停");
+        rendering=true;boolean on=p.getBoolean("enabled",false);if(enabled.isChecked()!=on)enabled.setChecked(on);rendering=false;
+        long last=p.getLong("last_upload",0);label(lastTransfer,last>0?"最近同步  "+clock(last)+"  ·  上传与接收 "+p.getLong("last_duration",0)+" ms":"还没有同步记录");
+        String error=p.getString("last_error","");label(errorText,error.isEmpty()?"":"上次同步错误："+error);
+        label(permissionText,(SyncService.filesAllowed(this)?"✓ 文件访问已授权":"需要文件访问权限以读取新截图")+"\n请开启后台自启动，并将省电策略设为无限制。");
     }
     // API 33+ explicitly excludes other apps; older versions use package-scoped broadcasts.
     @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")

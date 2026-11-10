@@ -31,9 +31,9 @@ def run():
         auth = "Basic " + base64.b64encode(b"test:local-test-token").decode()
         image = (ROOT / "tests/fixtures/image.png").read_bytes()
 
-        def request(name="Screenshot_Integration.png", body=image, authenticated=True):
+        def request(name="Screenshot_Integration.png", body=image, authenticated=True, method="PUT", endpoint=None):
             headers = {"Authorization": auth} if authenticated else {}
-            req = urllib.request.Request("http://127.0.0.1:{}/screenshot/{}".format(port, name), data=body, headers=headers, method="PUT")
+            req = urllib.request.Request("http://127.0.0.1:{}{}".format(port, endpoint or "/screenshot/" + name), data=body if method=="PUT" else None, headers=headers, method=method)
             try:
                 with urllib.request.urlopen(req, timeout=5) as response:
                     return response.status, response.read().decode()
@@ -52,6 +52,11 @@ def run():
                     if time.monotonic() >= deadline:
                         raise
                     time.sleep(0.1)
+            original = json.loads(subprocess.check_output([str(helper), "inspect"], text=True))
+            assert request(method="GET", endpoint="/health") == (200, "PadPaste ready")
+            assert request(method="GET", endpoint="/health", authenticated=False)[0] == 401
+            after_health = json.loads(subprocess.check_output([str(helper), "inspect"], text=True))
+            assert after_health["changeCount"] == original["changeCount"]
             assert request(body=b"not an image")[0] == 422
             assert request(name="..%2Foutside.png")[0] == 400
             assert request()[0] == 200

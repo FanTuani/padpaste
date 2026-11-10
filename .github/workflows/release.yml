@@ -5,7 +5,7 @@ on:
 permissions:
   contents: write
 jobs:
-  release:
+  macos:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -14,11 +14,54 @@ jobs:
       - run: bash scripts/build-macos.sh
       - run: python3 tests/integration.py
       - run: bash scripts/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/padpaste-*.zip
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build signed Android APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PADPASTE_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          PADPASTE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/padpaste.p12"
+          export PADPASTE_KEYSTORE="$RUNNER_TEMP/padpaste.p12"
+          cd android-native
+          ./gradlew testDebugUnitTest lintDebug assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk "padpaste-${GITHUB_REF_NAME}-android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: android-native/padpaste-*.apk
+  publish:
+    needs: [macos, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            dist/padpaste-*.zip dist/SHA256SUMS \
-            --title "PadPaste $GITHUB_REF_NAME" \
-            --generate-notes --verify-tag
+          cd dist
+          sha256sum padpaste-* > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" padpaste-* SHA256SUMS \
+            --title "PadPaste $GITHUB_REF_NAME" --generate-notes --verify-tag

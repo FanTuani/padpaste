@@ -1,32 +1,38 @@
 # 工作原理与接口
 
 ```text
-截图文件完成写入
-  → AutoJs6 FileObserver
-  → 检查完整图片、统一临时文件名
-  → 一次 HTTP 上传
-  → Mac 解码、保留原图缓存
-  → 写入图像剪贴板
-  → 主屏边缘渐隐闪光
+新截图写入 → Android FileObserver → 完整性检查与去重
+         → HTTP 原图上传 → Mac 图像剪贴板 → 主屏边缘闪光
 ```
 
-## 平板端
+## 原生 Android 客户端
 
-监听 `CREATE`、`MODIFY`、`CLOSE_WRITE` 和 `MOVED_TO`。文件关闭写入时立即检查；其他事件等待文件尺寸稳定，并确认 JPEG、PNG 或 WebP 的结束标记。
+使用 Java、系统 View、FileObserver、HandlerThread 和 SQLite，没有脚本引擎或第三方运行时依赖。
 
-小米的 `.pending-…-Screenshot_….jpg` 与 `Screenshot_….jpg` 映射到同一个名字。第一次完整图片上传成功后，后续重命名不再重复发送。脚本启动前已有的截图会被跳过。
+前台服务每次创建都会重建文件监听；返回 `START_STICKY`，系统重新创建服务时也会恢复。界面重新打开、开机和升级后，按用户此前的启用状态恢复服务。系统明确停止应用或厂商限制后台启动时，仍遵守系统行为。
 
-网络失败会保留当前进程中的待传队列并重试；重启脚本不会补传旧截图。为避免 AutoJs6 在空闲时延迟分发跨线程回调，脚本保留 125 ms 的轻量事件心跳；它仅维持脚本事件循环响应，不在每次心跳中执行处理队列或扫描目录。目录兜底仍为每 5 秒一次；FileObserver 不可用时使用短间隔兜底。脚本不持有持续唤醒锁。
+`CREATE/MODIFY/CLOSE_WRITE/MOVED_TO` 触发工作线程处理，不依赖 JavaScript 回调或心跳。关闭写入时立即检查；其余事件短暂等待文件稳定。每 5 秒的目录扫描仅作漏事件兜底，不持有持续唤醒锁。
 
-## Mac 端
+小米 `.pending-…-Screenshot_….jpg` 与正式文件名归一为同一个任务。待传任务、重试时间和已发送记录保存在 SQLite 中；进程重建后仍可恢复，网络失败时按 1–30 秒退避。首次开启前和手动暂停期间的旧截图不会批量导入。
 
-使用 AppKit、Network.framework 和 ImageIO，无额外运行时依赖。接收完整图片后准备 TIFF 剪贴板格式，同时提供原始 JPEG/PNG 与文件 URL。原文件直接写入缓存，不重新压缩；保留最近 `cacheLimit` 张。
+连接检测使用认证请求。App 界面可见时每 20 秒检测一次；后台仅在网络变化和传图时更新连接状态。密码与配置保存在应用私有存储中，不写入公共目录。
 
-闪光使用缓存的白色透明度纹理和 Core Animation，仅出现在系统主显示器上，不抢焦点或阻挡鼠标。中心完全透明。动画直接由接收完成事件触发，不扫描系统剪贴板。
+## Mac 接收器
 
-只在请求处理期间申请及时处理活动，完成后释放；空闲没有剪贴板轮询。
+使用 AppKit、Network.framework 和 ImageIO。原文件写入缓存，不重新压缩。准备 TIFF 图像格式，以及原始 JPEG/PNG 和文件 URL，写入系统剪贴板后才返回成功。
+
+边缘闪光是缓存纹理上的 0.3 秒 Core Animation，仅显示在系统主屏，中心透明，不抢焦点或阻挡鼠标。接收完成直接触发，不轮询剪贴板。
 
 ## HTTP 接口
+
+所有请求使用 HTTP Basic 配对认证。
+
+```http
+GET /health HTTP/1.1
+Authorization: Basic <base64(username:password)>
+```
+
+成功返回 `200 PadPaste ready`。不改动剪贴板。原生 App 对 v0.1.x 接收器提供兼容检测。
 
 ```http
 PUT /screenshot/Screenshot_2026-01-01-12-00-00-123_com.example.app.jpg HTTP/1.1
@@ -37,24 +43,28 @@ Content-Length: <原图字节数>
 <图片原始字节>
 ```
 
-路径中的文件名使用 URL 编码，统一为 `Screenshot_…`，扩展名支持 `jpg/jpeg/png/webp`。
+文件名按 URL 编码，归一为 `Screenshot_…`，扩展名支持 `jpg/jpeg/png/webp`。
 
-| 状态 | 含义 |
+| 响应 | 含义 |
 |---|---|
-| `200 clipboard ready` | 图片已写入系统剪贴板 |
-| `200 duplicate` | 同一文件名在本次进程中已处理 |
-| `400` | 文件名或 HTTP 格式错误 |
+| `200 clipboard ready` | 已写入图像剪贴板 |
+| `200 duplicate` | 本进程已接收同名任务 |
+| `400` | 文件名或请求格式错误 |
 | `401` | 配对信息不匹配 |
-| `413` | 长度无效、超过 50 MB，或使用分块传输 |
-| `422` | 图片未写完整或无法解码 |
+| `413` | 长度无效、超过 50 MB 或使用分块传输 |
+| `422` | 图片不完整或无法解码 |
 | `500` | 缓存或剪贴板写入失败 |
 
-请求必须带 `Content-Length`。单请求最多 50 MB，接收超时 20 秒。协议为带认证的明文 HTTP，适用于可信局域网，不提供传输加密。
+单请求最多 50 MB，要求 `Content-Length`，接收超时 20 秒。协议为带认证的明文 HTTP，适用于可信局域网，不提供传输加密。
 
-## 开发与验证
+## 构建与测试
 
-- `node --test tests/formats.test.js`：临时名去重、图片写入完整性、Java 有符号字节。
-- `python3 -m unittest discover -s tests -p 'test_*.py'`：配对、升级保留配置、配置权限。
-- `python3 tests/integration.py`：在独立临时目录和随机端口启动接收器，检查认证、图片剪贴板、重试幂等和缓存保留；完成后恢复原剪贴板。
+```sh
+bash scripts/build-macos.sh
+python3 tests/integration.py
+cd android-native && ./gradlew assembleDebug testDebugUnitTest lintDebug
+```
 
-`PADPASTE_HOME` 可改变 Mac 的数据目录，用于开发和测试。程序的 `--check-config` 参数仅校验配置后退出。
+Mac 集成测试在独立目录和随机端口运行，结束后恢复原剪贴板。`PADPASTE_HOME` 可改变测试数据目录。Android 单元测试覆盖临时文件去重与图片写入完整性。
+
+旧 AutoJs6 客户端保留在 `android/`，其使用与诊断方法见历史版本文档。

@@ -1,33 +1,23 @@
 # 故障排查
 
-## 截图没有到 Mac
+## 界面显示未连接
 
-1. 确认两台设备在同一局域网，Mac 没有睡眠。
-2. 检查 `/sdcard/PadPaste/status.json`。`watching` 表示已启动，`uploaded` 表示成功，`retrying` 附有失败原因。
-3. 确认实际截图目录与 `screenshotDirectory` 相同，文件名为 `Screenshot_…` 或小米 `.pending-…-Screenshot_…`。
-4. Mac 日志位于 `~/Library/Application Support/PadPaste/receiver.log`。如端口已被其他接收程序使用，可修改端口并重新生成平板配对文件。
+确认两台设备在同一局域网、Mac 已唤醒，点击「检测连接」。配对错误时重新导入 Mac 生成的 JSON。若 `.local` 无法解析，可把地址改为 Mac 当前局域网 IP；更换网络后需同步更新。
 
-## `.local` 地址无法连接
+## 已连接但截图没上传
 
-部分网络会隔离无线设备或不转发 mDNS。把平板配置的 `server` 改为 Mac 当前局域网 IP；Mac 地址变化后需同步更新。
+「Mac 连接」和「截图监控」是两个独立状态。检查自动同步是否开启、文件访问是否授权、截图实际目录是否一致，以及文件名是否为 `Screenshot_…` 或小米 `.pending-…-Screenshot_…`。
 
-```sh
-python3 scripts/configure.py --host 192.168.1.10
-```
+## 清理后台后停止
 
-## 平板过一会就停止上传
+重新打开 PadPaste，之前启用的监控会自动恢复。开启后台自启动和省电「无限制」，小米设备可锁定最近任务。系统强行停止与部分厂商清理行为会阻止后台重启；可查看系统的应用退出原因，而不只看通知图标。
 
-给 AutoJs6 开启后台自启动、允许前台通知，并把省电策略设为「无限制」。不要强制停止 AutoJs6。恢复时重新运行脚本即可。
+## 截图排队或上传失败
 
-## 配置修改后不生效
+App 显示待传数量和上次错误。网络恢复后会自动重试。队列在应用私有数据库中持久保存；不要清除应用数据。
 
-Mac 和平板各自读取本地配置，修改后需要重启。改了 Mac 端口或配对密码，还需重新生成并复制平板配置。
+## 修改 Mac 设置
 
-## 如何定位延迟
+编辑 `~/Library/Application Support/PadPaste/config.json` 后重启接收器。改了密码或端口，还需要重新生成配对文件并导入平板。
 
-将平板配置中的 `diagnostics` 设为 `true`，重启脚本。随后查看：
-
-- 平板：`/sdcard/PadPaste/latency-trace.json`。
-- Mac：`~/Library/Application Support/PadPaste/latency-trace.json`。
-
-计时覆盖文件完成、读取、上传、解码与剪贴板写入。不同设备时钟不能直接相减；比较跨设备总耗时前先校准时钟。日常使用可关闭平板详细诊断。
+Mac 日志：`~/Library/Application Support/PadPaste/receiver.log`。分段计时：同目录 `latency-trace.json`。Android 调试日志可通过 `adb logcat` 查看。

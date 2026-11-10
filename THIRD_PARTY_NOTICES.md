@@ -2,9 +2,9 @@
 
 PadPaste is MIT licensed.
 
-The Android client grew out of the screenshot-watching approach in [imgs/SyncAutojs6](https://github.com/imgs/SyncAutojs6), itself based on [Jeric-X/SyncClipboard](https://github.com/Jeric-X/SyncClipboard). The final Mac receiver uses an independent single-upload protocol and does not require SyncClipboard. Applicable MIT notices are reproduced below.
+The legacy AutoJs client in `android/` grew out of the screenshot-watching approach in [imgs/SyncAutojs6](https://github.com/imgs/SyncAutojs6), itself based on [Jeric-X/SyncClipboard](https://github.com/Jeric-X/SyncClipboard). The final Mac receiver uses an independent single-upload protocol and does not require SyncClipboard. Applicable MIT notices are reproduced below.
 
-[AutoJs6](https://github.com/SuperMonster003/AutoJs6) is a separately installed runtime licensed under MPL-2.0; its binaries are not bundled with PadPaste.
+The native Android app in `android-native/` does not depend on AutoJs6. The legacy client requires the separately installed [AutoJs6](https://github.com/SuperMonster003/AutoJs6) runtime (MPL-2.0); its binaries are not bundled. The Gradle wrapper is Apache-2.0 licensed.
 
 ## SyncAutojs6
 
