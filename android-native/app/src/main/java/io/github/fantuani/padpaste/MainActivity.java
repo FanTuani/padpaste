@@ -59,7 +59,7 @@ public final class MainActivity extends Activity {
         action(status,"检测连接",this::checkConnection);
         LinearLayout monitoring=card();LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);LinearLayout labels=column();monitorTitle=text("截图监控已暂停",18,INK,true);labels.addView(monitorTitle);gap(labels,5);labels.addView(text("开启后，新截图会自动进入 Mac 剪贴板",12,MUTED,false));row.addView(labels,new LinearLayout.LayoutParams(0,-2,1));enabled=new Switch(this);row.addView(enabled);monitoring.addView(row);gap(monitoring,18);lastTransfer=text("还没有同步记录",14,MUTED,false);monitoring.addView(lastTransfer);gap(monitoring,7);errorText=text("",12,0xFFBA5E49,false);monitoring.addView(errorText);
         enabled.setOnCheckedChangeListener((b,on)->{if(rendering)return;if(on)enableMonitoring();else{Config.prefs(this).edit().putBoolean("enabled",false).apply();if(SyncState.running)startService(new Intent(this,SyncService.class).setAction(SyncService.STOP));render();}});
-        LinearLayout settings=card();settings.addView(text("配对设置",18,INK,true));gap(settings,16);server=field(settings,"MAC 地址","http://your-mac.local:5034",false);user=field(settings,"用户名","padpaste",false);password=field(settings,"配对密码","导入配对文件自动填写",true);directory=field(settings,"截图目录","/storage/emulated/0/DCIM/Screenshots",false);
+        LinearLayout settings=card();settings.addView(text("配对设置",18,INK,true));gap(settings,16);server=field(settings,"MAC 地址","http://your-mac.local:5034",false);server.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);user=field(settings,"用户名","padpaste",false);password=field(settings,"配对密码","导入配对文件自动填写",true);directory=field(settings,"截图目录","/storage/emulated/0/DCIM/Screenshots",false);
         Button save=button("保存设置",true);settings.addView(save,new LinearLayout.LayoutParams(-1,dp(48)));save.setOnClickListener(v->{saveConfig();if(!new Config(this).valid()){toast("请检查 Mac 地址、用户名和密码");return;}toast("已保存");if(Config.prefs(this).getBoolean("enabled",false))startForegroundService(new Intent(this,SyncService.class).setAction(SyncService.RECONFIGURE));checkConnection();});
         action(settings,"导入配对文件",()->{Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(pick,101);});
         LinearLayout permissions=card();permissions.addView(text("后台运行",18,INK,true));gap(permissions,10);permissionText=text("",13,MUTED,false);permissions.addView(permissionText);action(permissions,"授权文件访问",this::requestFiles);action(permissions,"后台运行设置",()->startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getPackageName()))));
@@ -76,7 +76,7 @@ public final class MainActivity extends Activity {
         update.apply();
         if(!SyncService.filesAllowed(this)){requestFiles();render();return;}
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},102);
-        startForegroundService(new Intent(this,SyncService.class));render();
+        startForegroundService(new Intent(this,SyncService.class).setAction(SyncService.RECONFIGURE));render();
     }
     private void requestFiles(){
         if(Build.VERSION.SDK_INT>=30)startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:"+getPackageName())));
