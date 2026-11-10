@@ -45,9 +45,30 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
-      - run: cd android-native && ./gradlew assembleDebug lintDebug --no-daemon
+      - run: cd android-native && ./gradlew assembleDebug --no-daemon
+      - run: cd android-native && ./gradlew lintDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: padpaste-android-debug
           path: android-native/app/build/outputs/apk/debug/*.apk
+      - name: Build signed Android APK
+        if: github.event_name == 'push'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PADPASTE_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          PADPASTE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then exit 0; fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/padpaste.p12"
+          export PADPASTE_KEYSTORE="$RUNNER_TEMP/padpaste.p12"
+          cd android-native && ./gradlew assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: padpaste-android-release
+          path: android-native/app/build/outputs/apk/release/*.apk
+          if-no-files-found: ignore

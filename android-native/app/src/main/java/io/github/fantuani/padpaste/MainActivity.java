@@ -29,7 +29,8 @@ public final class MainActivity extends Activity {
     private TextView connectionTitle,connectionSubtitle,monitorTitle,lastTransfer,errorText,permissionText;
     private EditText server,user,password,directory;
     private Switch enabled;
-    private boolean rendering,checking;
+    private boolean rendering;
+    private volatile boolean checking;
     private long lastCheck;
     private LinearLayout content;
     private final Runnable refresh=new Runnable(){public void run(){render();if(System.currentTimeMillis()-lastCheck>20000)checkConnection();ui.postDelayed(this,1000);}};
