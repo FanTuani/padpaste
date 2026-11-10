@@ -1,0 +1,8 @@
+{
+  "username": "padpaste",
+  "password": "replace-with-a-random-token",
+  "port": 5034,
+  "flashEnabled": true,
+  "flashDuration": 0.3,
+  "cacheLimit": 20
+}

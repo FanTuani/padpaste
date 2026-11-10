@@ -1,0 +1,12 @@
+.DS_Store
+build/
+dist/
+*.app/
+*.dSYM/
+*.zip
+*.log
+__pycache__/
+config.json
+android-config.json
+.env
+.env.*

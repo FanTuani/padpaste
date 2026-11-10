@@ -1,0 +1,8 @@
+{
+  "server": "http://your-mac.local:5034",
+  "username": "padpaste",
+  "password": "replace-with-a-random-token",
+  "screenshotDirectory": "/sdcard/DCIM/Screenshots",
+  "startOnBoot": true,
+  "diagnostics": false
+}
