@@ -84,6 +84,6 @@ launchctl bootout gui/$(id -u)/io.github.fantuani.padpaste
 launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/io.github.fantuani.padpaste.plist"
 ```
 
-卸载 Mac 应用：`bash scripts/uninstall-macos.sh`；同时删除配置和缓存：`bash scripts/uninstall-macos.sh --purge`。
+卸载 Mac 应用：`bash scripts/uninstall-macos.sh`；同时删除配置和日志：`bash scripts/uninstall-macos.sh --purge`。
 
 Android 先关闭截图监控，再卸载 PadPaste。关闭后的截图和启用前的旧截图不受影响。Release APK 使用持久签名，可覆盖升级；本地 debug APK 与发行版签名不同。
