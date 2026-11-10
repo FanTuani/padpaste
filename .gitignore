@@ -10,3 +10,9 @@ config.json
 android-config.json
 .env
 .env.*
+
+android-native/.gradle/
+android-native/local.properties
+android-native/app/build/
+*.jks
+*.keystore

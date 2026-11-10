@@ -35,3 +35,19 @@ jobs:
           path: |
             dist/padpaste-*.zip
             dist/SHA256SUMS
+
+  android-native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: cd android-native && ./gradlew assembleDebug lintDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: padpaste-android-debug
+          path: android-native/app/build/outputs/apk/debug/*.apk

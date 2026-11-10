@@ -1,0 +1,28 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'io.github.fantuani.padpaste'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'io.github.fantuani.padpaste'
+        minSdk 26
+        targetSdk 35
+        versionCode 200
+        versionName '0.2.0'
+        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    signingConfigs {
+        release {
+            if (System.getenv('PADPASTE_KEYSTORE')) {
+                storeFile file(System.getenv('PADPASTE_KEYSTORE'))
+                storePassword System.getenv('PADPASTE_STORE_PASSWORD')
+                keyAlias 'padpaste'
+                keyPassword System.getenv('PADPASTE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release { minifyEnabled false; if (System.getenv('PADPASTE_KEYSTORE')) signingConfig signingConfigs.release }
+    }
+    lint { abortOnError true }
+}
