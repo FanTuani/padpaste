@@ -175,4 +175,6 @@ function pump() {
         if(next!==Infinity)requestPump(Math.max(10,Math.min(next,5000)));
     }
 }
-setInterval(function(){requestPump(0);},observerWorking?5000:150);
+// AutoJs6 can defer JavaAdapter callbacks while its looper is idle.
+// This only drains queued events; directory fallback scans remain 5s apart.
+setInterval(function(){requestPump(0);},125);
