@@ -134,7 +134,7 @@ private final class ScreenshotRequest {
                           let header = String(data: buffer[..<split.lowerBound], encoding: .utf8) else { respond(400, "bad header"); return }
                     let lines = header.components(separatedBy: "\r\n")
                     let request = lines[0].split(separator: " ")
-                    guard request.count == 3, request[0] == "PUT" else { respond(405, "PUT required"); return }
+                    guard request.count == 3 else { respond(400, "bad request"); return }
                     var headers: [String:String] = [:]
                     for line in lines.dropFirst() {
                         if let colon=line.firstIndex(of: ":") {
@@ -142,6 +142,8 @@ private final class ScreenshotRequest {
                         }
                     }
                     guard headers["authorization"] == authorization else { respond(401, "unauthorized"); return }
+                    if request[0] == "GET" && request[1] == "/health" { respond(200, "PadPaste ready"); return }
+                    guard request[0] == "PUT" else { respond(405, "PUT required"); return }
                     guard headers["transfer-encoding"] == nil,
                           let size = Int(headers["content-length"] ?? ""), size > 0, size <= 50*1024*1024 else { respond(413, "invalid size"); return }
                     let path = String(request[1])

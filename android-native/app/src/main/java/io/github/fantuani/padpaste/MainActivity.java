@@ -70,7 +70,10 @@ public final class MainActivity extends Activity {
     private void enableMonitoring(){
         saveConfig();Config c=new Config(this);
         if(!c.valid()){toast("请先导入配对信息或填写 Mac 地址和密码");render();return;}
-        Config.prefs(this).edit().putBoolean("enabled",true).apply();
+        android.content.SharedPreferences p=Config.prefs(this);
+        android.content.SharedPreferences.Editor update=p.edit().putBoolean("enabled",true);
+        if(!p.getBoolean("enabled",false))update.putLong("baseline",System.currentTimeMillis());
+        update.apply();
         if(!SyncService.filesAllowed(this)){requestFiles();render();return;}
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},102);
         startForegroundService(new Intent(this,SyncService.class));render();
@@ -91,9 +94,11 @@ public final class MainActivity extends Activity {
         monitorTitle.setText(SyncState.running?SyncState.phase+(SyncState.pending>0?" · 排队 "+SyncState.pending:""):p.getBoolean("enabled",false)?"等待恢复监控":"截图监控已暂停");
         rendering=true;enabled.setChecked(p.getBoolean("enabled",false));rendering=false;
         long last=p.getLong("last_upload",0);lastTransfer.setText(last>0?"最近同步  "+clock(last)+"  ·  上传与接收 "+p.getLong("last_duration",0)+" ms":"还没有同步记录");
-        errorText.setText(p.getString("last_error",""));
+        String error=p.getString("last_error","");errorText.setText(error.isEmpty()?"":"上次同步错误："+error);
         permissionText.setText((SyncService.filesAllowed(this)?"✓ 文件访问已授权":"需要文件访问权限以读取新截图")+"\n请开启后台自启动，并将省电策略设为无限制。");
     }
+    // API 33+ explicitly excludes other apps; older versions use package-scoped broadcasts.
+    @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
     @Override protected void onResume(){super.onResume();if(Build.VERSION.SDK_INT>=33)registerReceiver(stateReceiver,new IntentFilter(SyncState.ACTION),Context.RECEIVER_NOT_EXPORTED);else registerReceiver(stateReceiver,new IntentFilter(SyncState.ACTION));
         if(Config.prefs(this).getBoolean("enabled",false)&&SyncService.filesAllowed(this)&&new Config(this).valid()&&!SyncState.running)startForegroundService(new Intent(this,SyncService.class));ui.post(refresh);
     }
