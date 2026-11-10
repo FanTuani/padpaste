@@ -21,7 +21,7 @@ case "restore":
 case "inspect":
     let image = NSImage(pasteboard: board)
     let info: [String: Any] = ["width": image?.size.width ?? 0, "height": image?.size.height ?? 0,
-        "png": board.data(forType: .png)?.base64EncodedString() ?? "", "changeCount": board.changeCount]
+        "fileURL": board.string(forType: .fileURL) ?? "", "png": board.data(forType: .png)?.base64EncodedString() ?? "", "changeCount": board.changeCount]
     print(String(data: try JSONSerialization.data(withJSONObject: info), encoding: .utf8)!)
 default: exit(1)
 }

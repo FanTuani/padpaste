@@ -57,7 +57,7 @@ public final class MainActivity extends Activity {
         TextView brand=text("PadPaste",34,INK,true);content.addView(brand);gap(content,5);content.addView(text("截图即粘贴  ·  同一 Wi-Fi，原图直达 Mac",14,MUTED,false));gap(content,28);
         LinearLayout status=card();status.addView(text("MAC 连接",11,MUTED,true));gap(status,10);connectionTitle=text("尚未检测",24,INK,true);status.addView(connectionTitle);gap(status,6);connectionSubtitle=text("导入配对信息后检测连接",13,MUTED,false);status.addView(connectionSubtitle);
         action(status,"检测连接",this::checkConnection);
-        LinearLayout monitoring=card();LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);LinearLayout labels=column();monitorTitle=text("截图监控已暂停",18,INK,true);labels.addView(monitorTitle);gap(labels,5);labels.addView(text("开启后，新截图会自动进入 Mac 剪贴板",12,MUTED,false));row.addView(labels,new LinearLayout.LayoutParams(0,-2,1));enabled=new Switch(this);row.addView(enabled);monitoring.addView(row);gap(monitoring,18);lastTransfer=text("还没有同步记录",14,MUTED,false);monitoring.addView(lastTransfer);gap(monitoring,7);errorText=text("",12,0xFFBA5E49,false);monitoring.addView(errorText);
+        LinearLayout monitoring=card();LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);LinearLayout labels=column();monitorTitle=text("截图监控已暂停",18,INK,true);labels.addView(monitorTitle);gap(labels,5);labels.addView(text("仅保留 Mac 剪贴板；成功或失败后均清理平板截图",12,MUTED,false));row.addView(labels,new LinearLayout.LayoutParams(0,-2,1));enabled=new Switch(this);row.addView(enabled);monitoring.addView(row);gap(monitoring,18);lastTransfer=text("还没有同步记录",14,MUTED,false);monitoring.addView(lastTransfer);gap(monitoring,7);errorText=text("",12,0xFFBA5E49,false);monitoring.addView(errorText);
         enabled.setOnCheckedChangeListener((b,on)->{if(rendering)return;if(on)enableMonitoring();else{Config.prefs(this).edit().putBoolean("enabled",false).apply();if(SyncState.running)startService(new Intent(this,SyncService.class).setAction(SyncService.STOP));render();}});
         LinearLayout settings=card();settings.addView(text("配对设置",18,INK,true));gap(settings,16);server=field(settings,"MAC 地址","http://your-mac.local:5034",false);server.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);user=field(settings,"用户名","padpaste",false);password=field(settings,"配对密码","导入配对文件自动填写",true);directory=field(settings,"截图目录","/storage/emulated/0/DCIM/Screenshots",false);
         Button save=button("保存设置",true);settings.addView(save,new LinearLayout.LayoutParams(-1,dp(48)));save.setOnClickListener(v->{saveConfig();if(!new Config(this).valid()){toast("请检查 Mac 地址、用户名和密码");return;}toast("已保存");if(Config.prefs(this).getBoolean("enabled",false))startForegroundService(new Intent(this,SyncService.class).setAction(SyncService.RECONFIGURE));checkConnection();});
@@ -80,7 +80,7 @@ public final class MainActivity extends Activity {
     }
     private void requestFiles(){
         if(Build.VERSION.SDK_INT>=30)startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:"+getPackageName())));
-        else requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},103);
+        else requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE},103);
     }
     private void checkConnection(){
         if(checking)return;lastCheck=System.currentTimeMillis();Config c=new Config(this);if(!c.valid()){render();return;}
@@ -92,9 +92,9 @@ public final class MainActivity extends Activity {
     private void render(){
         android.content.SharedPreferences p=Config.prefs(this);long confirmed=p.getLong("last_confirmed",0);boolean connected=p.getBoolean("connected",false)&&System.currentTimeMillis()-confirmed<90000;
         if(!checking){label(connectionTitle,connected?"● 已连接到 Mac":new Config(this).valid()?"○ 等待 Mac 连接":"等待配对");connectionTitle.setTextColor(connected?GREEN:INK);label(connectionSubtitle,connected?new Config(this).server+"\n最近确认 "+clock(confirmed):new Config(this).valid()?p.getString("connection_error","点击检测连接"):"导入 Mac 生成的配对文件");}
-        label(monitorTitle,SyncState.running?SyncState.phase+(SyncState.pending>0?" · 排队 "+SyncState.pending:""):p.getBoolean("enabled",false)?"等待恢复监控":"截图监控已暂停");
+        label(monitorTitle,SyncState.running?SyncState.phase:p.getBoolean("enabled",false)?"等待恢复监控":"截图监控已暂停");
         rendering=true;boolean on=p.getBoolean("enabled",false);if(enabled.isChecked()!=on)enabled.setChecked(on);rendering=false;
-        long last=p.getLong("last_upload",0);label(lastTransfer,last>0?"最近同步  "+clock(last)+"  ·  上传与接收 "+p.getLong("last_duration",0)+" ms":"还没有同步记录");
+        long last=p.getLong("last_upload",0),failure=p.getLong("last_failure",0);label(lastTransfer,failure>last?"最近失败  "+clock(failure)+(p.getBoolean("last_failure_cleaned",false)?"  ·  临时截图已清理":"  ·  请检查截图清理权限"):last>0?"最近同步  "+clock(last)+"  ·  上传与接收 "+p.getLong("last_duration",0)+" ms":"还没有同步记录");
         String error=p.getString("last_error","");label(errorText,error.isEmpty()?"":"上次同步错误："+error);
         label(permissionText,(SyncService.filesAllowed(this)?"✓ 文件访问已授权":"需要文件访问权限以读取新截图")+"\n请开启后台自启动，并将省电策略设为无限制。");
     }

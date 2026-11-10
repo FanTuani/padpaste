@@ -25,7 +25,7 @@ def run():
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        config = {"username": "test", "password": "local-test-token", "port": port, "flashEnabled": False, "cacheLimit": 2}
+        config = {"username": "test", "password": "local-test-token", "port": port, "flashEnabled": False}
         (home / "config.json").write_text(json.dumps(config))
         process = subprocess.Popen([str(BINARY)], env={**os.environ, "PADPASTE_HOME": str(home)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         auth = "Basic " + base64.b64encode(b"test:local-test-token").decode()
@@ -63,14 +63,16 @@ def run():
             info = json.loads(subprocess.check_output([str(helper), "inspect"], text=True))
             assert info["width"] == 640 and info["height"] == 200
             assert base64.b64decode(info["png"]) == image
-            assert (home / "received/Screenshot_Integration.png").read_bytes() == image
+            assert info["fileURL"] == ""
+            assert not (home / "received").exists()
             assert request()[1] == "duplicate"
             unchanged = json.loads(subprocess.check_output([str(helper), "inspect"], text=True))
             assert unchanged["changeCount"] == info["changeCount"]
             assert request(name="Screenshot_Second.png")[0] == 200
             assert request(name="Screenshot_Third.png")[0] == 200
-            assert len(list((home / "received").glob("*.png"))) == 2
-            print("PASS: authentication, complete images, filename handling, clipboard contents, idempotent retry, cache retention")
+            assert not (home / "received").exists()
+            assert not any(p.suffix in (".png", ".jpg", ".jpeg", ".webp", ".tiff") for p in home.rglob("*"))
+            print("PASS: authentication, complete images, filename handling, clipboard contents, duplicate suppression, memory-only clipboard without image files")
         finally:
             process.terminate()
             try:

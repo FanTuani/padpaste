@@ -6,7 +6,6 @@ struct AppConfiguration: Decodable {
     let port: UInt16
     let flashDuration: Double
     let flashEnabled: Bool
-    let cacheLimit: Int
 
     static var dataDirectory: URL {
         if let directory = ProcessInfo.processInfo.environment["PADPASTE_HOME"] {
@@ -16,7 +15,7 @@ struct AppConfiguration: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case username, password, port, flashDuration, flashEnabled, cacheLimit
+        case username, password, port, flashDuration, flashEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -26,9 +25,8 @@ struct AppConfiguration: Decodable {
         port = try values.decodeIfPresent(UInt16.self, forKey: .port) ?? 5034
         flashDuration = try values.decodeIfPresent(Double.self, forKey: .flashDuration) ?? 0.3
         flashEnabled = try values.decodeIfPresent(Bool.self, forKey: .flashEnabled) ?? true
-        cacheLimit = try values.decodeIfPresent(Int.self, forKey: .cacheLimit) ?? 20
         guard !username.isEmpty, !username.contains(":"), !password.isEmpty, port > 0,
-              flashDuration > 0, flashDuration <= 5, cacheLimit > 0 else {
+              flashDuration > 0, flashDuration <= 5 else {
             throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid PadPaste configuration"))
         }
     }

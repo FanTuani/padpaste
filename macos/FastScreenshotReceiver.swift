@@ -8,7 +8,6 @@ final class FastScreenshotReceiver {
     private var committed = Set<String>()
     private var trace: [[String: Any]] = []
     let onReceived: (String) -> Void
-    let root = AppConfiguration.dataDirectory.appendingPathComponent("received")
     private let configuration: AppConfiguration
     private var authorization = ""
 
@@ -19,7 +18,6 @@ final class FastScreenshotReceiver {
     }
 
     func start() throws {
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let service = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: configuration.port)!)
         service.newConnectionHandler = { [weak self] connection in
             guard let self else { connection.cancel(); return }
@@ -48,22 +46,19 @@ final class FastScreenshotReceiver {
               cgImage.width > 0, cgImage.height > 0 else {
             respond(422, "incomplete image"); return
         }
-        let destination = root.appendingPathComponent(name)
+        let extensionName = (name as NSString).pathExtension.lowercased()
         let bitmap = NSBitmapImageRep(cgImage: cgImage)
         guard let tiff = bitmap.tiffRepresentation else { respond(422, "invalid image"); return }
-        do { try body.write(to: destination, options: .atomic) }
-        catch { respond(500, "cache write failed"); return }
         let prepared = Date().timeIntervalSince1970 * 1000
         DispatchQueue.main.async { [weak self] in
             guard let self else { respond(503, "stopped"); return }
             let item = NSPasteboardItem()
             item.setData(tiff, forType: .tiff)
-            if ["jpg", "jpeg"].contains(destination.pathExtension.lowercased()) {
+            if ["jpg", "jpeg"].contains(extensionName) {
                 item.setData(body, forType: NSPasteboard.PasteboardType("public.jpeg"))
-            } else if destination.pathExtension.lowercased() == "png" {
+            } else if extensionName == "png" {
                 item.setData(body, forType: .png)
             }
-            item.setString(destination.absoluteString, forType: .fileURL)
             let pb = NSPasteboard.general
             pb.clearContents()
             guard pb.writeObjects([item]) else { respond(500, "clipboard write failed"); return }
@@ -74,25 +69,17 @@ final class FastScreenshotReceiver {
                 self.committed.insert(name)
                 self.trace.append(["name": name, "bytes": body.count, "connectionMs": began,
                     "bodyDoneMs": bodyDone, "imageReadyMs": prepared, "clipboardMs": published,
-                    "receiveMs": bodyDone - began, "decodeAndCacheMs": prepared - bodyDone,
+                    "receiveMs": bodyDone - began, "decodeMs": prepared - bodyDone,
                     "mainQueueAndClipboardMs": published - prepared])
                 self.trace = Array(self.trace.suffix(30))
-                let traceURL = self.root.deletingLastPathComponent().appendingPathComponent("latency-trace.json")
+                let traceURL = AppConfiguration.dataDirectory.appendingPathComponent("latency-trace.json")
                 if let data = try? JSONSerialization.data(withJSONObject: self.trace, options: .sortedKeys) { try? data.write(to: traceURL, options: .atomic) }
-                self.cleanCache()
                 respond(200, "clipboard ready")
             }
         }
     }
 
-    private func cleanCache() {
-        let urls = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        let images = urls.filter { $0.lastPathComponent.hasPrefix("Screenshot_") }.sorted {
-            ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) >
-            ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
-        }
-        for url in images.dropFirst(configuration.cacheLimit) { try? FileManager.default.removeItem(at: url) }
-    }
+
 }
 
 private final class ScreenshotRequest {

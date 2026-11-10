@@ -30,7 +30,7 @@ def configure(directory, host, port=None, reset_token=False):
         raise ValueError("port must be between 1 and 65535")
     config.setdefault("flashEnabled", True)
     config.setdefault("flashDuration", 0.3)
-    config.setdefault("cacheLimit", 20)
+    config.pop("cacheLimit", None)
     write_private(path, config)
     client = {
         "server": "http://{}:{}".format(host, config["port"]),
