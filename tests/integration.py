@@ -2,6 +2,8 @@
 """Exercise the public receiver API; restore the original clipboard afterward."""
 import base64
 import json
+import hmac
+import hashlib
 import os
 import pathlib
 import socket
@@ -52,6 +54,13 @@ def run():
                     if time.monotonic() >= deadline:
                         raise
                     time.sleep(0.1)
+            nonce = "1234567890abcdef1234567890abcdef"
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as discovery:
+                discovery.settimeout(2)
+                discovery.sendto(("PADPASTE_DISCOVER " + nonce).encode(), ("127.0.0.1", 5035))
+                reply = discovery.recv(512).decode().split()
+            expected = hmac.new(b"local-test-token", ("padpaste|"+nonce+"|"+str(port)).encode(), hashlib.sha256).hexdigest()
+            assert reply == ["PADPASTE_FOUND",nonce,str(port),expected]
             original = json.loads(subprocess.check_output([str(helper), "inspect"], text=True))
             assert request(method="GET", endpoint="/health") == (200, "PadPaste ready")
             assert request(method="GET", endpoint="/health", authenticated=False)[0] == 401

@@ -1,9 +1,11 @@
 import AppKit
 import Network
 import ImageIO
+import CryptoKit
 
 final class FastScreenshotReceiver {
     private var listener: NWListener?
+    private var discovery: NWListener?
     private let queue = DispatchQueue(label: "tablet.screenshot.receive", qos: .userInitiated)
     private var committed = Set<String>()
     private var trace: [[String: Any]] = []
@@ -35,6 +37,25 @@ final class FastScreenshotReceiver {
         }
         listener = service
         service.start(queue: queue)
+        let udp = try NWListener(using: .udp, on: 5035)
+        udp.newConnectionHandler = { [weak self] connection in
+            guard let self else { connection.cancel(); return }
+            connection.start(queue: self.queue)
+            connection.receiveMessage { data, _, _, _ in
+                guard let data, let request = String(data: data, encoding: .utf8),
+                      request.hasPrefix("PADPASTE_DISCOVER ") else { connection.cancel(); return }
+                let nonce = String(request.dropFirst(18))
+                guard nonce.count == 32, nonce.allSatisfy({ $0.isHexDigit }) else { connection.cancel(); return }
+                let port = self.configuration.port
+                let message = "padpaste|\(nonce)|\(port)"
+                let proof = HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: SymmetricKey(data: Data(self.configuration.password.utf8)))
+                let hex = proof.map { String(format: "%02x", $0) }.joined()
+                let reply = Data("PADPASTE_FOUND \(nonce) \(port) \(hex)".utf8)
+                connection.send(content: reply, completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        discovery = udp
+        udp.start(queue: queue)
     }
 
     private func accept(name: String, body: Data, began: Double, respond: @escaping (Int, String) -> Void) {

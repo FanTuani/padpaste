@@ -8,11 +8,18 @@ import java.net.URI;
 final class Config {
     static SharedPreferences prefs(Context c) { return c.getSharedPreferences("padpaste", Context.MODE_PRIVATE); }
     final String server, username, password, directory;
+    private final Context context;
     Config(Context c) {
+        context=c.getApplicationContext();
         SharedPreferences p = prefs(c);
         server = p.getString("server", ""); username = p.getString("username", "padpaste");
         password = p.getString("password", ""); directory = p.getString("directory", "/storage/emulated/0/DCIM/Screenshots");
     }
+    String endpoint() {
+        SharedPreferences p=prefs(context);
+        return server.equals(p.getString("resolved_origin",""))?p.getString("resolved_server",server):server;
+    }
+    void resolved(String endpoint) {prefs(context).edit().putString("resolved_origin",server).putString("resolved_server",endpoint).apply();}
     boolean valid() {
         try { URI u = URI.create(server); return ("http".equals(u.getScheme()) || "https".equals(u.getScheme())) && u.getHost() != null && u.getUserInfo() == null && !username.isEmpty() && !username.contains(":") && !password.isEmpty(); }
         catch (RuntimeException e) { return false; }

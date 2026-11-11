@@ -91,7 +91,7 @@ public final class MainActivity extends Activity {
     private void label(TextView view,String value){if(!view.getText().toString().equals(value))view.setText(value);}
     private void render(){
         android.content.SharedPreferences p=Config.prefs(this);long confirmed=p.getLong("last_confirmed",0);boolean connected=p.getBoolean("connected",false)&&System.currentTimeMillis()-confirmed<90000;
-        if(!checking){label(connectionTitle,connected?"● 已连接到 Mac":new Config(this).valid()?"○ 等待 Mac 连接":"等待配对");connectionTitle.setTextColor(connected?GREEN:INK);label(connectionSubtitle,connected?new Config(this).server+"\n最近确认 "+clock(confirmed):new Config(this).valid()?p.getString("connection_error","点击检测连接"):"导入 Mac 生成的配对文件");}
+        if(!checking){label(connectionTitle,connected?"● 已连接到 Mac":new Config(this).valid()?"○ 等待 Mac 连接":"等待配对");connectionTitle.setTextColor(connected?GREEN:INK);label(connectionSubtitle,connected?new Config(this).endpoint()+"\n最近确认 "+clock(confirmed):new Config(this).valid()?p.getString("connection_error","点击检测连接"):"导入 Mac 生成的配对文件");}
         label(monitorTitle,SyncState.running?SyncState.phase:p.getBoolean("enabled",false)?"等待恢复监控":"截图监控已暂停");
         rendering=true;boolean on=p.getBoolean("enabled",false);if(enabled.isChecked()!=on)enabled.setChecked(on);rendering=false;
         long last=p.getLong("last_upload",0),failure=p.getLong("last_failure",0);label(lastTransfer,failure>last?"最近失败  "+clock(failure)+(p.getBoolean("last_failure_cleaned",false)?"  ·  临时截图已清理":"  ·  请检查截图清理权限"):last>0?"最近同步  "+clock(last)+"  ·  上传与接收 "+p.getLong("last_duration",0)+" ms":"还没有同步记录");
