@@ -31,7 +31,7 @@ public final class MainActivity extends Activity {
     private android.app.Dialog settingsDialog;
     private ConnectionArtwork artwork;
     private EditText server,user,password,directory;
-    private Switch enabled;
+    private SyncToggle enabled;
     private boolean rendering;
     private volatile boolean checking;
     private long lastCheck;
@@ -74,7 +74,7 @@ public final class MainActivity extends Activity {
         content.addView(connection);gap(content,wide?36:20);rule(content);gap(content,24);
         LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout names=column();names.addView(text("截图同步",19,INK,true));gap(names,8);monitorTitle=text("",14,MUTED,false);names.addView(monitorTitle);row.addView(names,new LinearLayout.LayoutParams(0,-2,1));
-        enabled=new Switch(this);enabled.setContentDescription("截图同步");if(Build.VERSION.SDK_INT>=29)enabled.setMinHeight(dp(48));row.addView(enabled,new LinearLayout.LayoutParams(dp(64),dp(48)));content.addView(row);
+        enabled=new SyncToggle(this);enabled.setContentDescription("截图同步");row.addView(enabled,new LinearLayout.LayoutParams(dp(108),dp(56)));content.addView(row);
         enabled.setOnCheckedChangeListener((b,on)->{if(rendering)return;if(on)enableMonitoring();else{Config.prefs(this).edit().putBoolean("enabled",false).apply();if(SyncState.running)startService(new Intent(this,SyncService.class).setAction(SyncService.STOP));render();}});
         gap(content,24);rule(content);gap(content,24);
         LinearLayout stats=new LinearLayout(this);LinearLayout latest=column();latest.addView(text("最近同步",12,MUTED,false));gap(latest,10);lastTransfer=text("—",24,INK,true);latest.addView(lastTransfer);stats.addView(latest,new LinearLayout.LayoutParams(0,-2,1));
@@ -93,11 +93,38 @@ public final class MainActivity extends Activity {
         Button save=button("保存配对",true);body.addView(save,new LinearLayout.LayoutParams(-1,dp(48)));save.setOnClickListener(v->{saveConfig();if(!new Config(this).valid()){toast("请检查 Mac 地址、用户名和密码");return;}if(Config.prefs(this).getBoolean("enabled",false))startForegroundService(new Intent(this,SyncService.class).setAction(SyncService.RECONFIGURE));settingsDialog.dismiss();checkConnection();toast("配对已保存");});
         gap(body,28);rule(body);gap(body,20);permissionText=text("",14,INK,false);body.addView(permissionText);action(body,"文件访问权限",this::requestFiles);action(body,"后台运行设置",()->startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getPackageName()))));
         gap(body,24);body.addView(text("仅剪贴板：传输后清理平板截图，失败不重传。",13,MUTED,false));
+        settingsDialog.setOnDismissListener(d->fillConfig());
         settingsDialog.setContentView(scroll);android.view.Window window=settingsDialog.getWindow();if(window!=null){window.setBackgroundDrawable(background(Color.WHITE,24));window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);}
     }
     private void showSettings(){
         render();settingsDialog.show();android.view.Window window=settingsDialog.getWindow();if(window!=null){int w=getResources().getDisplayMetrics().widthPixels,h=getResources().getDisplayMetrics().heightPixels;window.setLayout(Math.min(dp(520),w-dp(32)),Math.min(dp(640),h-dp(64)));}
         settingsDialog.getWindow().getDecorView().setAlpha(0);settingsDialog.getWindow().getDecorView().animate().alpha(1).setDuration(160).start();
+    }
+    private final class SyncToggle extends CompoundButton {
+        private final android.graphics.Paint paint=new android.graphics.Paint(3);
+        private float position;
+        private android.animation.ValueAnimator movement;
+        SyncToggle(Context context){super(context,null,0);setButtonDrawable(null);setBackgroundColor(Color.TRANSPARENT);setClickable(true);setFocusable(true);}
+        @Override public void setChecked(boolean checked){
+            boolean changed=checked!=isChecked();super.setChecked(checked);
+            if(!changed)return;if(movement!=null)movement.cancel();
+            movement=android.animation.ValueAnimator.ofFloat(position,checked?1:0);movement.setDuration(180);
+            movement.addUpdateListener(a->{position=(float)a.getAnimatedValue();invalidate();});movement.start();
+        }
+        @Override public CharSequence getAccessibilityClassName(){return "android.widget.Switch";}
+        @Override protected void onDraw(android.graphics.Canvas canvas){
+            float w=getWidth(),h=getHeight(),inset=dp(3),radius=(h-inset*2)/2;
+            paint.setStyle(android.graphics.Paint.Style.FILL);paint.setColor((Integer)new android.animation.ArgbEvaluator().evaluate(position,0xFFDFE7E7,ACCENT));
+            canvas.drawRoundRect(inset,inset,w-inset,h-inset,radius,radius,paint);
+            paint.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));paint.setTextSize(dp(15));paint.setTextAlign(android.graphics.Paint.Align.CENTER);
+            paint.setColor(isChecked()?Color.WHITE:0xFF71848A);String label=isChecked()?"开":"关";
+            float textX=isChecked()?w*.27f:w*.73f;canvas.drawText(label,textX,h/2-(paint.ascent()+paint.descent())/2,paint);
+            float thumbR=h/2-dp(8),left=h/2,right=w-h/2,x=left+(right-left)*position;
+            paint.setColor(Color.WHITE);canvas.drawCircle(x,h/2,thumbR,paint);
+            paint.setStyle(android.graphics.Paint.Style.STROKE);paint.setStrokeWidth(dp(2));paint.setStrokeCap(android.graphics.Paint.Cap.ROUND);paint.setColor(isChecked()?ACCENT:0xFF9AA9AD);
+            if(isChecked()){canvas.drawLine(x-dp(6),h/2,x-dp(1),h/2+dp(5),paint);canvas.drawLine(x-dp(1),h/2+dp(5),x+dp(7),h/2-dp(5),paint);}
+            else canvas.drawLine(x-dp(5),h/2,x+dp(5),h/2,paint);
+        }
     }
     private final class ConnectionArtwork extends View {
         private final android.graphics.Paint paint=new android.graphics.Paint(3);private int state=-1;
