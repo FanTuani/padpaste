@@ -128,7 +128,7 @@ public final class SyncService extends Service {
         if(uploaded){
             Config.prefs(this).edit().putLong("last_upload",System.currentTimeMillis()).putLong("last_duration",duration).putString("last_error",cleaned?"":"平板截图清理失败").apply();
             SyncState.connection(this,true,"");
-            popup(cleaned?"已同步到 Mac 剪贴板":"截图已同步，但平板截图清理失败");
+            popup(cleaned?"已同步："+duration+"ms":"截图已同步，但平板截图清理失败");
         }else{
             if(attempted)SyncState.connection(this,false,error);
             reportFailure(error,cleaned);
