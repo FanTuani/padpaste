@@ -26,6 +26,7 @@ public final class SyncService extends Service {
     private Handler worker;
     private final Handler ui=new Handler(Looper.getMainLooper());
     private FileObserver observer;
+    private Toast feedback;
     private CaptureLedger ledger;
     // Only a short, in-memory wait for the system to finish writing each image.
     private final Map<String,Capture> writing=new LinkedHashMap<>();
@@ -126,11 +127,11 @@ public final class SyncService extends Service {
         ledger.finish(capture.name,cleaned);writing.remove(capture.name);SyncState.phase="正在监控";
         if(uploaded){
             Config.prefs(this).edit().putLong("last_upload",System.currentTimeMillis()).putLong("last_duration",duration).putString("last_error",cleaned?"":"平板截图清理失败").apply();
-            SyncState.connection(this,true,"");updateNotification("已送达剪贴板 · "+duration+" ms");
-            if(!cleaned)popup("截图已同步，但平板截图清理失败");
+            SyncState.connection(this,true,"");
+            popup(cleaned?"已同步到 Mac 剪贴板":"截图已同步，但平板截图清理失败");
         }else{
             if(attempted)SyncState.connection(this,false,error);
-            reportFailure(error,cleaned);updateNotification("上次同步失败 · 未保留待传图片");
+            reportFailure(error,cleaned);
         }
         SyncState.publish(this);schedule(0);
     }
@@ -155,7 +156,7 @@ public final class SyncService extends Service {
         Config.prefs(this).edit().putLong("last_failure",System.currentTimeMillis()).putBoolean("last_failure_cleaned",cleaned).putString("last_error",error+(cleaned?"":"；平板截图清理失败")).apply();
         popup(cleaned?"截图同步失败，临时截图已清理":"截图同步失败，平板截图清理失败");
     }
-    private void popup(String message){ui.post(()->Toast.makeText(this,message,Toast.LENGTH_LONG).show());}
+    private void popup(String message){ui.post(()->{if(feedback!=null)feedback.cancel();feedback=Toast.makeText(this,message,Toast.LENGTH_SHORT);feedback.show();});}
     private void checkConnection(){
         if(config==null)return;
         try{MacClient.check(config);SyncState.connection(this,true,"");}
