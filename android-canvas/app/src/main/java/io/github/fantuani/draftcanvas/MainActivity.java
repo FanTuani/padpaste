@@ -13,6 +13,7 @@ public final class MainActivity extends Activity {
     CanvasView canvas;
     private TextView pen,select,erase,undo,redo,paste,zoom,selectionLabel;
     private LinearLayout selectionBar;
+    private int lastColor;
     private final Map<Integer,Swatch> swatches=new LinkedHashMap<>();
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private GradientDrawable bg(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
@@ -40,10 +41,10 @@ public final class MainActivity extends Activity {
     private void hint(String value){Toast.makeText(this,value,Toast.LENGTH_SHORT).show();}
     private void paste(){canvas.ink.paste(canvas.getWidth(),canvas.getHeight());canvas.mode=CanvasView.SELECT;canvas.refresh();}
     private void update(){
-        for(TextView t:new TextView[]{pen,select,erase}){boolean selected=(t==pen&&canvas.mode==CanvasView.PEN)||(t==select&&canvas.mode==CanvasView.SELECT)||(t==erase&&canvas.mode==CanvasView.ERASE);t.setBackground(bg(selected?0xFFE7F2EE:Color.TRANSPARENT,12));t.setTextColor(selected?TEAL:INK);t.setSelected(selected);}
+        for(TextView t:new TextView[]{pen,select,erase}){boolean selected=(t==pen&&canvas.mode==CanvasView.PEN)||(t==select&&canvas.mode==CanvasView.SELECT)||(t==erase&&canvas.mode==CanvasView.ERASE);if(t.isSelected()!=selected){t.setBackground(bg(selected?0xFFE7F2EE:Color.TRANSPARENT,12));t.setTextColor(selected?TEAL:INK);t.setSelected(selected);}}
         undo.setEnabled(canvas.ink.canUndo());undo.setAlpha(undo.isEnabled()?1:.3f);redo.setEnabled(canvas.ink.canRedo());redo.setAlpha(redo.isEnabled()?1:.3f);paste.setEnabled(canvas.ink.canPaste());paste.setAlpha(paste.isEnabled()?1:.3f);
-        int n=canvas.ink.selected.size();selectionBar.setVisibility(n>0?View.VISIBLE:View.GONE);selectionLabel.setText("已选 "+n+" 笔");String z=String.format(Locale.ROOT,canvas.ink.view.scale>=.1?"%.0f%%":"%.2f%%",canvas.ink.view.scale*100);if(!zoom.getText().toString().equals(z))zoom.setText(z);
-        for(Swatch s:swatches.values())s.invalidate();
+        int n=canvas.ink.selected.size();selectionBar.setVisibility(n>0?View.VISIBLE:View.GONE);String label="已选 "+n+" 笔";if(!selectionLabel.getText().toString().equals(label))selectionLabel.setText(label);String z=String.format(Locale.ROOT,canvas.ink.view.scale>=.1?"%.0f%%":"%.2f%%",canvas.ink.view.scale*100);if(!zoom.getText().toString().equals(z))zoom.setText(z);
+        if(lastColor!=canvas.color){lastColor=canvas.color;for(Swatch s:swatches.values())s.invalidate();}
     }
     private void showWidths(){final String[] labels={"极细","细","中","粗"};final float[] values={1.2f,2.3f,3.8f,6};new AlertDialog.Builder(this).setTitle("笔画粗细").setItems(labels,(d,i)->{canvas.width=dp(values[i]);canvas.tool(CanvasView.PEN);}).show();}
     private final class Swatch extends View {
