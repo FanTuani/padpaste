@@ -1,0 +1,112 @@
+package io.github.fantuani.draftcanvas;
+
+import android.content.Context;
+import android.graphics.*;
+import android.os.Build;
+import android.view.*;
+import java.util.*;
+
+public final class CanvasView extends View {
+    public static final int PEN=0,SELECT=1,ERASE=2;
+    public final Ink ink;
+    public int mode=PEN,color=0xFF243137;public float width;
+    public Runnable changed=()->{};
+    private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final WeakHashMap<Ink.Stroke,Path> paths=new WeakHashMap<>();
+    private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
+    private long lastPen;
+    private double startX,startY,dragX,dragY;
+    private final ArrayList<Float> samples=new ArrayList<>();private double strokeX,strokeY;
+    private int strokeColor;private float strokeWidth;
+    private boolean fingers;private int fingerCount;private float prevX,prevY,prevDistance;
+    private double gestureX,gestureY,gestureScale;
+    public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);setBackgroundColor(0xFFFAFAF7);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
+    private float dp(float n){return n*getResources().getDisplayMetrics().density;}
+    private double wx(float x){return ink.view.worldX(x,getWidth());}private double wy(float y){return ink.view.worldY(y,getHeight());}
+    public void tool(int value){cancelPen();mode=value;if(mode!=SELECT)ink.selected.clear();refresh();}
+    public void refresh(){postInvalidateOnAnimation();changed.run();}
+    @Override protected void onDraw(android.graphics.Canvas c){
+        super.onDraw(c);drawGrid(c);
+        double l=wx(0),t=wy(0),r=wx(getWidth()),b=wy(getHeight());
+        for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy);}
+        if(!samples.isEmpty()&&!erasing&&!dragging&&!marquee)drawStroke(c,activeStroke(),0,0);
+        double[] bounds=ink.selectionBounds();
+        if(marquee)bounds=new double[]{Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY)};
+        else if(bounds!=null){bounds[0]+=dragX;bounds[2]+=dragX;bounds[1]+=dragY;bounds[3]+=dragY;}
+        if(mode==SELECT&&bounds!=null){
+            float x1=screenX(bounds[0]),y1=screenY(bounds[1]),x2=screenX(bounds[2]),y2=screenY(bounds[3]);
+            paint.setStyle(Paint.Style.FILL);paint.setColor(0x11167B70);c.drawRect(x1,y1,x2,y2,paint);
+            paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);paint.setStrokeWidth(dp(1.2f));paint.setPathEffect(new DashPathEffect(new float[]{dp(5),dp(4)},0));c.drawRect(x1,y1,x2,y2,paint);paint.setPathEffect(null);
+            if(!marquee){paint.setStyle(Paint.Style.FILL);for(float x:new float[]{x1,x2})for(float y:new float[]{y1,y2}){paint.setColor(Color.WHITE);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.FILL);}}
+        }
+    }
+    private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
+    private void drawGrid(android.graphics.Canvas c){
+        double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
+        double pixels=step*ink.view.scale;float x0=(float)((getWidth()/2.0-((ink.view.x%step)+step)%step*ink.view.scale)%pixels),y0=(float)((getHeight()/2.0-((ink.view.y%step)+step)%step*ink.view.scale)%pixels);
+        paint.setStyle(Paint.Style.FILL);paint.setColor(0xFFDDE2DE);
+        for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels)c.drawCircle(x,y,dp(.65f),paint);
+    }
+    private float radius(Ink.Stroke s,int i){return s.width*(.5f+.5f*(float)Math.sqrt(Math.max(.05f,s.points[i+2])))/2;}
+    private Path outline(Ink.Stroke s){
+        Path path=new Path();int n=s.points.length/3;if(n<2)return path;
+        for(int side=1;side>=-1;side-=2){for(int j=0;j<n;j++){int i=(side==1?j:n-1-j)*3,prev=Math.max(0,i-3),next=Math.min(s.points.length-3,i+3);
+            float dx=s.points[next]-s.points[prev],dy=s.points[next+1]-s.points[prev+1],len=(float)Math.hypot(dx,dy);if(len<.001f){dx=1;dy=0;len=1;}
+            float radius=radius(s,i),x=s.points[i]-side*dy/len*radius,y=s.points[i+1]+side*dx/len*radius;
+            if(side==1&&j==0)path.moveTo(x,y);else path.lineTo(x,y);
+        }}path.close();return path;
+    }
+    private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy){
+        c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
+        paint.setStyle(Paint.Style.FILL);paint.setColor(s.color);Path path=paths.get(s);if(path==null){path=outline(s);if(s.id!=0)paths.put(s,path);}c.drawPath(path,paint);
+        int end=s.points.length-3;c.drawCircle(s.points[0],s.points[1],radius(s,0),paint);c.drawCircle(s.points[end],s.points[end+1],radius(s,end),paint);c.restore();
+    }
+    private Ink.Stroke activeStroke(){float[] p=new float[samples.size()];for(int i=0;i<p.length;i++)p[i]=samples.get(i);return new Ink.Stroke(0,strokeColor,strokeWidth,strokeX,strokeY,p);}
+    private void append(float x,float y,float pressure){
+        float lx=(float)(wx(x)-strokeX),ly=(float)(wy(y)-strokeY);int n=samples.size();if(n>=3&&Math.hypot(lx-samples.get(n-3),ly-samples.get(n-2))*ink.view.scale<.25)return;
+        float p=Math.max(.05f,Math.min(1,pressure));if(n>=3)p=.65f*samples.get(n-1)+.35f*p;samples.add(lx);samples.add(ly);samples.add(p);
+    }
+    private void beginPen(MotionEvent e,int i){
+        penId=e.getPointerId(i);fingers=false;lastPen=e.getEventTime();startX=wx(e.getX(i));startY=wy(e.getY(i));dragX=dragY=0;
+        erasing=mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER||(e.getButtonState()&MotionEvent.BUTTON_STYLUS_PRIMARY)!=0;
+        if(erasing){ink.begin();erase(startX,startY);return;}
+        if(mode==SELECT){double[] box=ink.selectionBounds();dragging=box!=null&&startX>=box[0]&&startX<=box[2]&&startY>=box[1]&&startY<=box[3];marquee=!dragging;if(marquee){ink.selected.clear();dragX=startX;dragY=startY;}return;}
+        samples.clear();strokeX=startX;strokeY=startY;strokeColor=color;strokeWidth=width;append(e.getX(i),e.getY(i),e.getPressure(i));
+    }
+    private void movePen(MotionEvent e,int i){
+        lastPen=e.getEventTime();double x=wx(e.getX(i)),y=wy(e.getY(i));
+        if(erasing){for(int h=0;h<e.getHistorySize();h++)erase(wx(e.getHistoricalX(i,h)),wy(e.getHistoricalY(i,h)));erase(x,y);}
+        else if(dragging){dragX=x-startX;dragY=y-startY;}
+        else if(marquee){dragX=x;dragY=y;}
+        else {for(int h=0;h<e.getHistorySize();h++)append(e.getHistoricalX(i,h),e.getHistoricalY(i,h),e.getHistoricalPressure(i,h));append(e.getX(i),e.getY(i),e.getPressure(i));}
+    }
+    private void erase(double x,double y){double tolerance=dp(12)/(ink.view.scale);ink.strokes.removeIf(s->{if(s.hit(x,y,tolerance)){ink.selected.remove(s.id);return true;}return false;});}
+    private void finishPen(){
+        if(erasing)ink.commit();else if(dragging)ink.move(dragX,dragY);else if(marquee)ink.select(Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY));
+        else if(!samples.isEmpty()){Ink.Stroke s=activeStroke();ink.add(new Ink.Stroke(ink.nextId(),s.color,s.width,s.x,s.y,s.points));}
+        samples.clear();penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;refresh();
+    }
+    private void cancelPen(){if(erasing)ink.cancel();samples.clear();penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
+    @Override public boolean onHoverEvent(MotionEvent e){if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;lastPen=e.getEventTime();return true;}return super.onHoverEvent(e);}
+    @Override public boolean onTouchEvent(MotionEvent e){
+        getParent().requestDisallowInterceptTouchEvent(true);int action=e.getActionMasked(),index=e.getActionIndex();
+        if(action==MotionEvent.ACTION_CANCEL){cancelPen();if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
+        if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){int tool=e.getToolType(index);if(tool==MotionEvent.TOOL_TYPE_STYLUS||tool==MotionEvent.TOOL_TYPE_ERASER){beginPen(e,index);postInvalidateOnAnimation();return true;}}
+        if(penId!=-1){int i=e.findPointerIndex(penId);if(i<0){cancelPen();return true;}if((action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP)&&e.getPointerId(index)==penId){
+                if(Build.VERSION.SDK_INT>=33&&(e.getFlags()&MotionEvent.FLAG_CANCELED)!=0){cancelPen();refresh();}else{movePen(e,i);finishPen();}
+            }else if(action==MotionEvent.ACTION_MOVE){movePen(e,i);postInvalidateOnAnimation();}return true;}
+        if(Build.VERSION.SDK_INT>=33&&action==MotionEvent.ACTION_POINTER_UP&&(e.getFlags()&MotionEvent.FLAG_CANCELED)!=0){if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
+        if(action==MotionEvent.ACTION_UP){fingers=false;performClick();return true;}
+        int count=0;float cx=0,cy=0,distance=0,firstX=0,firstY=0;
+        for(int i=0;i<e.getPointerCount();i++){if(action==MotionEvent.ACTION_POINTER_UP&&i==index)continue;if(e.getToolType(i)!=MotionEvent.TOOL_TYPE_FINGER)continue;if(count==0){firstX=e.getX(i);firstY=e.getY(i);}else if(count==1)distance=(float)Math.hypot(e.getX(i)-firstX,e.getY(i)-firstY);cx+=e.getX(i);cy+=e.getY(i);count++;if(count==2)break;}
+        if(count==0||((nearPen||e.getEventTime()-lastPen<250)&&count==1)){fingers=false;return true;}cx/=count;cy/=count;
+        if(!fingers||count!=fingerCount){if(!fingers){gestureX=ink.view.x;gestureY=ink.view.y;gestureScale=ink.view.scale;}fingers=true;fingerCount=count;prevX=cx;prevY=cy;prevDistance=distance;return true;}
+        if(action==MotionEvent.ACTION_MOVE){double anchorX=wx(prevX),anchorY=wy(prevY);if(count==2&&prevDistance>1)ink.view.zoom(distance/prevDistance,prevX,prevY,getWidth(),getHeight());ink.view.x=anchorX-(cx-getWidth()/2.0)/ink.view.scale;ink.view.y=anchorY-(cy-getHeight()/2.0)/ink.view.scale;prevX=cx;prevY=cy;prevDistance=distance;refresh();}return true;
+    }
+    @Override public boolean performClick(){super.performClick();return true;}
+    public void overview(){
+        if(ink.strokes.isEmpty()){ink.view.x=ink.view.y=0;ink.view.scale=1;refresh();return;}
+        double l=Double.POSITIVE_INFINITY,t=l,r=-l,b=-l;for(Ink.Stroke s:ink.strokes){l=Math.min(l,s.left);r=Math.max(r,s.right);t=Math.min(t,s.top);b=Math.max(b,s.bottom);}
+        ink.view.x=(l+r)/2;ink.view.y=(t+b)/2;ink.view.scale=Math.max(.0001,Math.min(8,Math.min(getWidth()*.75/Math.max(50,r-l),getHeight()*.6/Math.max(50,b-t))));refresh();
+    }
+}
