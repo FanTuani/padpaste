@@ -68,25 +68,25 @@ public final class CanvasView extends View {
         paint.setStyle(Paint.Style.FILL);paint.setColor(0xFFB9C4BC);
         for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels)c.drawCircle(x,y,dp(.8f),paint);
     }
-    private float radius(Ink.Stroke s,int i){return s.width*(.5f+.5f*(float)Math.sqrt(Math.max(.05f,s.points[i+2])))/2;}
-    private Path outline(Ink.Stroke s){
+    private Path centerline(Ink.Stroke s){
         float[] points=StrokeGeometry.smooth(s.points,s.width);
-        Path path=new Path();int n=points.length/3;if(n<2)return path;
-        for(int side=1;side>=-1;side-=2){for(int j=0;j<n;j++){int i=(side==1?j:n-1-j)*3,prev=Math.max(0,i-3),next=Math.min(points.length-3,i+3);
-            float dx=points[next]-points[prev],dy=points[next+1]-points[prev+1],len=(float)Math.hypot(dx,dy);if(len<.001f){dx=1;dy=0;len=1;}
-            float radius=s.width*(.5f+.5f*(float)Math.sqrt(Math.max(.05f,points[i+2])))/2,x=points[i]-side*dy/len*radius,y=points[i+1]+side*dx/len*radius;
-            if(side==1&&j==0)path.moveTo(x,y);else path.lineTo(x,y);
-        }}path.close();return path;
+        Path path=new Path();path.moveTo(points[0],points[1]);
+        for(int i=3;i<points.length;i+=3)path.lineTo(points[i],points[i+1]);
+        return path;
     }
     private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy){
         c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
-        paint.setStyle(Paint.Style.FILL);paint.setColor(s.color);Path path=paths.get(s);if(path==null){path=outline(s);if(s.id!=0)paths.put(s,path);}c.drawPath(path,paint);
-        int end=s.points.length-3;c.drawCircle(s.points[0],s.points[1],radius(s,0),paint);c.drawCircle(s.points[end],s.points[end+1],radius(s,end),paint);c.restore();
+        paint.setColor(s.color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(s.width);
+        paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
+        Path path=paths.get(s);if(path==null){path=centerline(s);if(s.id!=0)paths.put(s,path);}c.drawPath(path,paint);
+        // Android does not draw a zero-length Path as a round dot consistently.
+        if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
+        c.restore();
     }
     private Ink.Stroke activeStroke(){float[] p=new float[samples.size()];for(int i=0;i<p.length;i++)p[i]=samples.get(i);return new Ink.Stroke(0,strokeColor,strokeWidth,strokeX,strokeY,p);}
     private void append(float x,float y,float pressure){
         float lx=(float)(wx(x)-strokeX),ly=(float)(wy(y)-strokeY);int n=samples.size();if(n>=3&&Math.hypot(lx-samples.get(n-3),ly-samples.get(n-2))*ink.view.scale<.25)return;
-        float p=Math.max(.05f,Math.min(1,pressure));if(n>=3)p=.65f*samples.get(n-1)+.35f*p;samples.add(lx);samples.add(ly);samples.add(p);
+        samples.add(lx);samples.add(ly);samples.add(1f);
     }
     private void beginPen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);lastTool=e.getToolType(i);
