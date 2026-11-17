@@ -7,8 +7,8 @@ import android.view.*;
 
 /** Exercises real View dispatch with distinct synthetic pen and finger devices. */
 public final class CanvasTestRunner extends Instrumentation {
-    private long time;private float pressure=.65f;
-    @Override public void onCreate(Bundle args){super.onCreate(args);start();}
+    private long time;private float pressure=.65f;private boolean perf;
+    @Override public void onCreate(Bundle args){super.onCreate(args);perf=args!=null&&"true".equals(args.getString("perf"));start();}
     private void check(boolean value,String message){if(!value)throw new AssertionError(message);}
     private void event(CanvasView view,int tool,int action,float... xy){
         int n=xy.length/2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[n];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[n];
@@ -16,10 +16,12 @@ public final class CanvasTestRunner extends Instrumentation {
         MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
-    @Override public void onStart(){Bundle result=new Bundle();try{
-        MainActivity activity=(MainActivity)startActivitySync(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));waitForIdleSync();
+    @Override public void onStart(){if(perf){CanvasPerfRunner.run(this);return;}Bundle result=new Bundle();try{
         runOnMainSync(()->{
-            CanvasView v=activity.canvas;Ink d=v.ink;time=SystemClock.uptimeMillis();
+            CanvasView v=new CanvasView(getTargetContext(),new Ink());
+            android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
+            root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);
+            Ink d=v.ink;time=SystemClock.uptimeMillis();
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");
             time+=1000;double x=d.view.x;event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_DOWN,400,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,450,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,450,700);check(d.strokes.size()==1&&d.view.x<x,"finger must pan without ink");
