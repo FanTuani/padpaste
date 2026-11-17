@@ -1,7 +1,10 @@
 name: Draft Canvas
 on:
   push:
-    branches: ['feat/draft-canvas']
+    branches: [main, 'feat/draft-canvas']
+    paths: ['android-canvas/**', '.github/workflows/canvas.yml']
+  pull_request:
+    paths: ['android-canvas/**', '.github/workflows/canvas.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,6 +24,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: cd android-canvas && ./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest --no-daemon
       - name: Signed release
+        if: github.event_name != 'pull_request'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           PADPASTE_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
