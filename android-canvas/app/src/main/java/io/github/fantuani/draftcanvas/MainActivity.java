@@ -72,7 +72,28 @@ public final class MainActivity extends Activity {
         int n=canvas.ink.selected.size();selectionBar.setVisibility(n>0?View.VISIBLE:View.GONE);String label="已选 "+n+" 笔";if(!selectionLabel.getText().toString().equals(label))selectionLabel.setText(label);String z=String.format(Locale.ROOT,canvas.ink.view.scale>=.1?"%.0f%%":"%.2f%%",canvas.ink.view.scale*100);if(!zoom.getText().toString().equals(z))zoom.setText(z);
         if(lastColor!=canvas.color){lastColor=canvas.color;for(Swatch s:swatches.values())s.invalidate();}
     }
-    private void showWidths(){final String[] labels={"极细","细","中","粗"};final float[] values={1.2f,2.3f,3.8f,6};new AlertDialog.Builder(this).setTitle("笔画粗细").setItems(labels,(d,i)->{canvas.width=dp(values[i]);canvas.tool(CanvasView.PEN);}).show();}
+    private void showWidths(){
+        float density=getResources().getDisplayMetrics().density;
+        LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(24),dp(8),dp(24),dp(8));panel.setMinimumWidth(dp(340));
+        View preview=new View(this){private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);@Override protected void onDraw(android.graphics.Canvas c){
+            float y=getHeight()/2f;p.setColor(canvas.color);p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeWidth(canvas.width);c.drawLine(getWidth()*.08f,y,getWidth()*.45f,y,p);
+            p.setStyle(Paint.Style.FILL);p.setColor(0x10167B70);c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);p.setStyle(Paint.Style.STROKE);p.setColor(TEAL);p.setStrokeWidth(dp(1));c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);
+        }};
+        panel.addView(preview,new LinearLayout.LayoutParams(-1,dp(110)));
+        panel.addView(sizeControl("笔粗细",.3f,10,.1f,canvas.width/density,value->{canvas.width=value*density;preview.invalidate();}));
+        panel.addView(sizeControl("橡皮大小",6,96,1,canvas.eraserSize/density,value->{canvas.setEraserSize(value*density);preview.invalidate();}));
+        new AlertDialog.Builder(this).setTitle("笔与橡皮").setView(panel).setPositiveButton("完成",null).show();
+    }
+    private View sizeControl(String title,float min,float max,float step,float current,java.util.function.Consumer<Float> change){
+        LinearLayout group=new LinearLayout(this);group.setOrientation(LinearLayout.VERTICAL);
+        TextView label=new TextView(this);label.setTextColor(INK);label.setTextSize(16);label.setText(title+"  "+String.format(Locale.ROOT,"%.1f",current));group.addView(label);
+        LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);
+        SeekBar slider=new SeekBar(this);slider.setMax(Math.round((max-min)/step));slider.setProgress(Math.round((current-min)/step));slider.setContentDescription(title);slider.setProgressTintList(android.content.res.ColorStateList.valueOf(TEAL));slider.setThumbTintList(android.content.res.ColorStateList.valueOf(TEAL));
+        TextView minus=action("−",()->slider.setProgress(slider.getProgress()-1)),plus=action("+",()->slider.setProgress(slider.getProgress()+1));
+        row.addView(minus,new LinearLayout.LayoutParams(dp(44),dp(56)));row.addView(slider,new LinearLayout.LayoutParams(0,dp(56),1));row.addView(plus,new LinearLayout.LayoutParams(dp(44),dp(56)));group.addView(row);
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}public void onProgressChanged(SeekBar s,int value,boolean user){float v=min+value*step;label.setText(title+"  "+String.format(Locale.ROOT,"%.1f",v));change.accept(v);}});
+        return group;
+    }
     private final class Swatch extends View {
         private final int color;private final Paint p=new Paint(3);Swatch(int c){super(MainActivity.this);color=c;setContentDescription(color==INK?"墨黑":color==0xFF3169CA?"蓝色":color==0xFFCF4941?"红色":color==0xFF167B70?"绿色":color==0xFFBA761F?"橙色":"紫色");setClickable(true);setFocusable(true);}
         @Override protected void onDraw(android.graphics.Canvas c){float x=getWidth()/2f,y=getHeight()/2f;p.setStyle(Paint.Style.FILL);p.setColor(color);c.drawCircle(x,y,dp(10),p);if(canvas.color==color){p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(dp(1.5f));c.drawCircle(x,y,dp(14),p);}}
