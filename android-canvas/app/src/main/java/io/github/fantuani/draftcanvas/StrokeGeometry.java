@@ -30,7 +30,19 @@ final class StrokeGeometry {
         }
         quadratic(out,a[anchors.size-3],a[anchors.size-2],a[anchors.size-1],
             a[anchors.size-3],a[anchors.size-2],a[anchors.size-1],spacing*.5f);
-        return out.array();
+        return simplify(out.array(),Math.max(.08f,width*.025f));
+    }
+    /** Ramer-Douglas-Peucker with a 2.5% line-width error budget, after curve smoothing. */
+    static float[] simplify(float[] points,float tolerance){
+        int count=points.length/3;if(count<3)return points;
+        boolean[] keep=new boolean[count];keep[0]=keep[count-1]=true;int[] stack=new int[count*2];int size=0;stack[size++]=0;stack[size++]=count-1;
+        double limit=tolerance*tolerance;
+        while(size>0){int end=stack[--size],start=stack[--size],farthest=-1;double best=limit;
+            for(int i=start+1;i<end;i++){double distance=Eraser.distanceSquared(points[i*3],points[i*3+1],points[start*3],points[start*3+1],points[end*3],points[end*3+1]);if(distance>best){best=distance;farthest=i;}}
+            if(farthest!=-1){keep[farthest]=true;stack[size++]=start;stack[size++]=farthest;stack[size++]=farthest;stack[size++]=end;}
+        }
+        int remaining=0;for(boolean value:keep)if(value)remaining++;if(remaining==count)return points;
+        float[] result=new float[remaining*3];int index=0;for(int i=0;i<count;i++)if(keep[i]){System.arraycopy(points,i*3,result,index,3);index+=3;}return result;
     }
     private static void quadratic(Floats out,float cx,float cy,float cp,float ex,float ey,float ep,float step){
         float sx=out.x(),sy=out.y(),sp=out.p();

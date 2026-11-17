@@ -29,4 +29,9 @@ public class StrokeGeometryTest {
         assertTrue("subpixel oscillations should not become jagged normals",variation<1);
         assertEquals(input[57],p[p.length-3],.0001);
     }
+    @Test public void simplificationBoundsCurveErrorAndKeepsLoop(){
+        float[] dense=new float[3000];for(int i=0;i<1000;i++){double t=i*Math.PI*2/999;dense[i*3]=(float)(100*Math.cos(t));dense[i*3+1]=(float)(100*Math.sin(t));dense[i*3+2]=1;}
+        float[] small=StrokeGeometry.simplify(dense,.15f);assertTrue(small.length<dense.length/5);assertTrue(small.length>12);assertEquals(dense[0],small[0],0);assertEquals(dense[dense.length-3],small[small.length-3],0);
+        for(int i=0;i<dense.length;i+=3){double best=Double.POSITIVE_INFINITY;for(int j=3;j<small.length;j+=3)best=Math.min(best,Eraser.distanceSquared(dense[i],dense[i+1],small[j-3],small[j-2],small[j],small[j+1]));assertTrue("simplification exceeded subpixel error budget",best<=.15*.15+.00001);}
+    }
 }
