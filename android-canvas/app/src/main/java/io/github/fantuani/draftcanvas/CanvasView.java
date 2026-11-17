@@ -16,6 +16,7 @@ public final class CanvasView extends View {
         final Path path;final Ink.Cut cut;final float[] points;final boolean filled;
         RenderState(Path path,Ink.Stroke stroke){this.path=path;cut=stroke.cuts;points=stroke.points;filled=cut!=null;}
     }
+    private final InkTiles tiles=Build.VERSION.SDK_INT>=29?new InkTiles():null;
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
     private long lastPen;
     private boolean temporaryEraser;
@@ -50,13 +51,15 @@ public final class CanvasView extends View {
         MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();coords.x=x;coords.y=y;coords.pressure=pressure;
         long time=android.os.SystemClock.uptimeMillis();MotionEvent e=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,1,new MotionEvent.PointerProperties[]{prop},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,InputDevice.SOURCE_STYLUS,0);beginPen(e,0);e.recycle();
     }
+    void invalidateErasedArea(float left,float top,float right,float bottom){if(tiles!=null)tiles.invalidate(left-2,top-2,right+2,bottom+2);}
     public void setEraserSize(float size){eraserSize=size;cursorRadius=size/2;postInvalidateOnAnimation();}
     public void undo(){if(penId!=-1)finishPen();ink.undo();refresh();}
-    public void refresh(){postInvalidateOnAnimation();changed.run();}
+    public void refresh(){if(tiles!=null)tiles.invalidateAll();postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
-        double l=wx(0),t=wy(0),r=wx(getWidth()),b=wy(getHeight());
-        for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy);}
+        if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
+            tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
+        else drawInk(c,0,0,getWidth(),getHeight());
         if(!samples.isEmpty()&&!erasing&&!dragging&&!marquee)drawStroke(c,activeStroke(),0,0);
         double[] bounds=ink.selectionBounds();
         if(marquee)bounds=new double[]{Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY)};
@@ -74,6 +77,11 @@ public final class CanvasView extends View {
             paint.setStrokeWidth(dp(1));paint.setColor(0xD9167B70);c.drawCircle(lastX,lastY,radius,paint);
         }
     }
+    private void drawInk(android.graphics.Canvas c,int left,int top,int right,int bottom){
+        double l=wx(left),t=wy(top),r=wx(right),b=wy(bottom);
+        for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy);}
+    }
+    @Override protected void onDetachedFromWindow(){if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
     private void drawGrid(android.graphics.Canvas c){
         double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
@@ -142,15 +150,17 @@ public final class CanvasView extends View {
     }
     private void erase(double x,double y,float pressure){
         cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(pressure,eraserSensitivity));double radius=cursorRadius/ink.view.scale;
-        ink.erase(erasePoint?eraseX:x,erasePoint?eraseY:y,x,y,erasePoint?Math.max(radius,eraseRadius):radius);
+        double ax=erasePoint?eraseX:x,ay=erasePoint?eraseY:y,r=erasePoint?Math.max(radius,eraseRadius):radius;
+        if(ink.erase(ax,ay,x,y,r)&&tiles!=null)tiles.invalidate(screenX(Math.min(ax,x)-r)-2,screenY(Math.min(ay,y)-r)-2,screenX(Math.max(ax,x)+r)+2,screenY(Math.max(ay,y)+r)+2);
         erasePoint=true;eraseX=x;eraseY=y;eraseRadius=radius;
     }
     private void finishPen(){
+        boolean erased=erasing;
         if(erasing)ink.commit();else if(dragging)ink.move(dragX,dragY);else if(marquee)ink.select(Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY));
         else if(!samples.isEmpty()){Ink.Stroke s=activeStroke();ink.add(new Ink.Stroke(ink.nextId(),s.color,s.width,s.x,s.y,s.points));}
-        samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;refresh();
+        samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased){postInvalidateOnAnimation();changed.run();}else refresh();
     }
-    private void cancelPen(){if(erasing)ink.cancel();samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
+    private void cancelPen(){if(erasing){ink.cancel();if(tiles!=null)tiles.invalidateAll();}samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
     @Override public boolean onHoverEvent(MotionEvent e){
         if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){
             nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;lastPen=e.getEventTime();

@@ -16,6 +16,13 @@ public final class CanvasTestRunner extends Instrumentation {
         MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
+    @android.annotation.TargetApi(29)
+    private android.graphics.Bitmap snapshot(CanvasView v){
+        android.graphics.RenderNode node=new android.graphics.RenderNode("verify-tiles");node.setPosition(0,0,v.getWidth(),v.getHeight());
+        android.graphics.Canvas c=node.beginRecording(v.getWidth(),v.getHeight());v.draw(c);node.endRecording();
+        android.graphics.Bitmap gpu=android.graphics.HardwareRenderer.createHardwareBitmap(node,v.getWidth(),v.getHeight());
+        android.graphics.Bitmap bitmap=gpu.copy(android.graphics.Bitmap.Config.ARGB_8888,false);gpu.recycle();node.discardDisplayList();return bitmap;
+    }
     @Override public void onStart(){if(perf){CanvasPerfRunner.run(this);return;}Bundle result=new Bundle();try{
         runOnMainSync(()->{
             CanvasView v=new CanvasView(getTargetContext(),new Ink());
@@ -56,8 +63,16 @@ public final class CanvasTestRunner extends Instrumentation {
             d.undo();pressure=1;pen(v,MotionEvent.ACTION_DOWN,650,960);pen(v,MotionEvent.ACTION_MOVE,650,1040);pen(v,MotionEvent.ACTION_UP,650,1040);
             check(d.strokes.size()==2,"firm eraser removed unrelated line portions");check(d.strokes.get(1).left-d.strokes.get(0).right>lightGap,"firm pressure must enlarge erasure");
             java.util.List<Ink.Stroke> before=new java.util.ArrayList<>(d.strokes);pen(v,MotionEvent.ACTION_DOWN,530,1000);pen(v,MotionEvent.ACTION_MOVE,550,1000);pen(v,MotionEvent.ACTION_CANCEL,550,1000);check(before.equals(d.strokes),"canceled partial erase did not restore exact fragments");
+            if(Build.VERSION.SDK_INT>=29){
+                d.strokes.clear();v.tool(CanvasView.PEN);d.add(new Ink.Stroke(d.nextId(),inkColor,5,450,1100,new float[]{0,0,1,200,0,1}));v.refresh();
+                android.graphics.Bitmap image=snapshot(v);check(image.getPixel(512,1100)==inkColor,"GPU tile initial ink missing");image.recycle();
+                v.tool(CanvasView.ERASE);image=snapshot(v);image.recycle();v.setEraserSize(40);pressure=1;
+                pen(v,MotionEvent.ACTION_DOWN,512,1080);pen(v,MotionEvent.ACTION_MOVE,512,1120);pen(v,MotionEvent.ACTION_UP,512,1120);
+                image=snapshot(v);check(image.getPixel(512,1100)!=inkColor,"tile boundary kept erased ink");check(image.getPixel(460,1100)==inkColor&&image.getPixel(560,1100)==inkColor,"tile update changed ink outside eraser");image.recycle();
+                v.undo();image=snapshot(v);check(image.getPixel(512,1100)==inkColor,"GPU tile undo failed");image.recycle();
+            }
             v.refresh();
         });
-        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel\n");finish(Activity.RESULT_OK,result);
+        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels\n");finish(Activity.RESULT_OK,result);
     }catch(Throwable e){result.putString("stream","FAIL: "+e);finish(Activity.RESULT_CANCELED,result);}}
 }

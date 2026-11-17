@@ -79,7 +79,7 @@ public final class Ink {
         begin();selected.clear();List<Stroke> pasted=new ArrayList<>();for(Stroke s:clipboard){Stroke p=s.offset(nextId(),dx,dy);strokes.add(p);selected.add(p.id);pasted.add(p);}clipboard=pasted;commit();
     }
     public void deleteSelected(){if(selected.isEmpty())return;begin();strokes.removeIf(s->selected.contains(s.id));selected.clear();commit();}
-    public void erase(double ax,double ay,double bx,double by,double radius){
+    public boolean erase(double ax,double ay,double bx,double by,double radius){
         List<Stroke> next=new ArrayList<>();boolean changed=false;
         for(Stroke s:strokes){
             if(!s.intersects(Math.min(ax,bx)-radius,Math.min(ay,by)-radius,Math.max(ax,bx)+radius,Math.max(ay,by)+radius)){next.add(s);continue;}
@@ -93,7 +93,7 @@ public final class Ink {
             if(pieces==null)next.add(erasedStroke(s,s.points,s.flattened,cut));
             else for(float[] p:pieces)next.add(erasedStroke(s,p,true,cut));
         }
-        if(changed){strokes.clear();strokes.addAll(next);}
+        if(changed){strokes.clear();strokes.addAll(next);}return changed;
     }
     private Stroke erasedStroke(Stroke original,float[] points,boolean flattened,Cut cut){
         Stroke result=new Stroke(nextId(),original.color,original.width,original.x,original.y,points,flattened,cut);
