@@ -7,12 +7,12 @@ import android.view.*;
 
 /** Exercises real View dispatch with distinct synthetic pen and finger devices. */
 public final class CanvasTestRunner extends Instrumentation {
-    private long time;
+    private long time;private float pressure=.65f;
     @Override public void onCreate(Bundle args){super.onCreate(args);start();}
     private void check(boolean value,String message){if(!value)throw new AssertionError(message);}
     private void event(CanvasView view,int tool,int action,float... xy){
         int n=xy.length/2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[n];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[n];
-        for(int i=0;i<n;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=tool;coords[i]=new MotionEvent.PointerCoords();coords[i].x=xy[i*2];coords[i].y=xy[i*2+1];coords[i].pressure=.65f;coords[i].size=.1f;}
+        for(int i=0;i<n;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=tool;coords[i]=new MotionEvent.PointerCoords();coords[i].x=xy[i*2];coords[i].y=xy[i*2+1];coords[i].pressure=pressure;coords[i].size=.1f;}
         MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
@@ -32,8 +32,26 @@ public final class CanvasTestRunner extends Instrumentation {
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,250,300,550,300);
             check(Math.abs(d.view.scale-1.5)<.01,"two finger zoom failed");
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_POINTER_UP|(1<<8),250,300,550,300);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,250,300);
+            d.strokes.clear();d.view.x=v.getWidth()/2.0;d.view.y=v.getHeight()/2.0;d.view.scale=1;
+            int inkColor=0xff243137;d.add(new Ink.Stroke(d.nextId(),inkColor,20,500,800,new float[]{0,0,1,300,0,1}));
+            d.begin();d.erase(600,807,600,807,5);d.commit();
+            android.graphics.Bitmap bitmap=android.graphics.Bitmap.createBitmap(v.getWidth(),v.getHeight(),android.graphics.Bitmap.Config.ARGB_8888);
+            v.draw(new android.graphics.Canvas(bitmap));
+            check(bitmap.getPixel(600,807)!=inkColor,"circle failed to subtract thick ink edge");
+            check(bitmap.getPixel(600,795)==inkColor,"circle removed ink outside its boundary");
+            check(bitmap.getPixel(550,800)==inkColor,"local eraser removed the rest of the stroke");
+            d.undo();v.draw(new android.graphics.Canvas(bitmap));check(bitmap.getPixel(600,807)==inkColor,"undo did not restore erased ink");bitmap.recycle();
+            d.strokes.clear();v.tool(CanvasView.PEN);pressure=.1f;time+=1000;
+            pen(v,MotionEvent.ACTION_DOWN,500,1000);pressure=1;pen(v,MotionEvent.ACTION_MOVE,650,1000);pen(v,MotionEvent.ACTION_UP,800,1000);
+            check(d.strokes.size()==1,"pressure-varying pen stroke missing");for(int i=2;i<d.strokes.get(0).points.length;i+=3)check(d.strokes.get(0).points[i]==1,"writing must ignore pressure");
+            v.setEraserSize(40);v.tool(CanvasView.ERASE);pressure=.1f;
+            pen(v,MotionEvent.ACTION_DOWN,650,960);pen(v,MotionEvent.ACTION_MOVE,650,1040);pen(v,MotionEvent.ACTION_UP,650,1040);
+            check(d.strokes.size()==2,"swept eraser did not split the line");double lightGap=d.strokes.get(1).left-d.strokes.get(0).right;
+            d.undo();pressure=1;pen(v,MotionEvent.ACTION_DOWN,650,960);pen(v,MotionEvent.ACTION_MOVE,650,1040);pen(v,MotionEvent.ACTION_UP,650,1040);
+            check(d.strokes.size()==2,"firm eraser removed unrelated line portions");check(d.strokes.get(1).left-d.strokes.get(0).right>lightGap,"firm pressure must enlarge erasure");
+            java.util.List<Ink.Stroke> before=new java.util.ArrayList<>(d.strokes);pen(v,MotionEvent.ACTION_DOWN,530,1000);pen(v,MotionEvent.ACTION_MOVE,550,1000);pen(v,MotionEvent.ACTION_CANCEL,550,1000);check(before.equals(d.strokes),"canceled partial erase did not restore exact fragments");
             v.refresh();
         });
-        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom\n");finish(Activity.RESULT_OK,result);
+        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel\n");finish(Activity.RESULT_OK,result);
     }catch(Throwable e){result.putString("stream","FAIL: "+e);finish(Activity.RESULT_CANCELED,result);}}
 }

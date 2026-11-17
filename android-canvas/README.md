@@ -22,7 +22,9 @@ cd android-canvas
 Android 8+，JDK 17、SDK 35。首次连接真机时安装 debug APK 和 androidTest APK，运行：
 
 ```sh
-adb shell am instrument -w io.github.fantuani.draftcanvas.test/io.github.fantuani.draftcanvas.CanvasTestRunner
+adb shell am instrument -w io.github.fantuani.draftcanvas.debug.test/io.github.fantuani.draftcanvas.CanvasTestRunner
 ```
 
-测试使用合成笔/触摸事件验证 View 交互；实际小米笔的压力与手掌检测仍需真笔体验确认。
+Debug 包名带 `.debug`，可与正式版共存；小米按键免拦截需用正式版验证。
+
+测试使用合成笔/触摸事件验证 View 交互和局部擦除绘制；实际小米笔的压力与手掌检测仍需真笔体验确认。
