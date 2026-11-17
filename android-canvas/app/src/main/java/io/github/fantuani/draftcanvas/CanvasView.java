@@ -13,8 +13,8 @@ public final class CanvasView extends View {
     public Runnable changed=()->{};
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final class RenderState {
-        final Path path;final Ink.Cut cut;final float[] points;final boolean filled;
-        RenderState(Path path,Ink.Stroke stroke){this.path=path;cut=stroke.cuts;points=stroke.points;filled=cut!=null;}
+        final Path path,mask;final Ink.Cut cut;final float[] points;
+        RenderState(Path path,Path mask,Ink.Stroke stroke){this.path=path;this.mask=mask;cut=stroke.cuts;points=stroke.points;}
     }
     private float[] gridPoints;private int gridCount,gridWidth,gridHeight;
     private double gridX=Double.NaN,gridY,gridScale;
@@ -102,37 +102,25 @@ public final class CanvasView extends View {
         for(int i=3;i<points.length;i+=3)path.lineTo(points[i],points[i+1]);
         return path;
     }
-    private Path cutOutline(Ink.Stroke s,Path center,RenderState previous){
-        Path outline=new Path();
-        if(previous!=null&&previous.points!=s.points)previous=null;
-        if(previous!=null&&previous.filled&&previous.points==s.points)outline.set(previous.path);
-        else {
-            if(s.pathPoints().length==3){outline.addCircle(s.points[0],s.points[1],s.width/2,Path.Direction.CW);}
-            else {paint.getFillPath(center,outline);}
-        }
-        Path mask=new Path();
+    private Path eraserMask(Ink.Stroke s,RenderState previous){
+        Path mask=previous!=null&&previous.mask!=null?new Path(previous.mask):new Path();
         for(Ink.Cut cut=s.cuts;cut!=null&&(previous==null||cut!=previous.cut);cut=cut.previous){
             if(Math.max(cut.ax,cut.bx)+cut.radius<s.left-s.x||Math.min(cut.ax,cut.bx)-cut.radius>s.right-s.x||Math.max(cut.ay,cut.by)+cut.radius<s.top-s.y||Math.min(cut.ay,cut.by)-cut.radius>s.bottom-s.y)continue;
             float ax=(float)cut.ax,ay=(float)cut.ay,bx=(float)cut.bx,by=(float)cut.by,r=(float)cut.radius;
             mask.addCircle(ax,ay,r,Path.Direction.CW);mask.addCircle(bx,by,r,Path.Direction.CW);
             double length=Math.hypot(bx-ax,by-ay);
-            if(length>1e-6){float nx=(float)(-(by-ay)/length*r),ny=(float)((bx-ax)/length*r);
-                mask.moveTo(ax-nx,ay-ny);mask.lineTo(bx-nx,by-ny);mask.lineTo(bx+nx,by+ny);mask.lineTo(ax+nx,ay+ny);mask.close();}
-        }
-        outline.op(mask,Path.Op.DIFFERENCE);return outline;
+            if(length>1e-6){float nx=(float)(-(by-ay)/length*r),ny=(float)((bx-ax)/length*r);mask.moveTo(ax-nx,ay-ny);mask.lineTo(bx-nx,by-ny);mask.lineTo(bx+nx,by+ny);mask.lineTo(ax+nx,ay+ny);mask.close();}
+        }return mask;
     }
     private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy){
         c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
-        paint.setColor(s.color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(s.width);
-        paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setColor(s.color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(s.width);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
         RenderState state=s.renderState instanceof RenderState?(RenderState)s.renderState:null;
         if(state==null){RenderState previous=s.previousRender instanceof RenderState?(RenderState)s.previousRender:null;
-            Path path=previous!=null&&previous.filled&&previous.points==s.points?null:centerline(s);if(s.cuts!=null)path=cutOutline(s,path,previous);state=new RenderState(path,s);
-            if(s.id!=0){s.renderState=state;s.previousRender=null;}}
-        Path path=state.path;
-        if(s.cuts!=null)paint.setStyle(Paint.Style.FILL);c.drawPath(path,paint);
-        if(s.cuts==null&&s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
-        c.restore();
+            Path path=previous!=null&&previous.points==s.points?previous.path:centerline(s);
+            state=new RenderState(path,s.cuts==null?null:eraserMask(s,previous),s);if(s.id!=0){s.renderState=state;s.previousRender=null;}}
+        if(state.mask!=null)c.clipOutPath(state.mask);c.drawPath(state.path,paint);
+        if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}c.restore();
     }
     private Ink.Stroke activeStroke(){float[] p=new float[samples.size()];for(int i=0;i<p.length;i++)p[i]=samples.get(i);return new Ink.Stroke(0,strokeColor,strokeWidth,strokeX,strokeY,p);}
     private void append(float x,float y,float pressure){

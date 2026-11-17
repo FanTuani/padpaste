@@ -7,8 +7,8 @@ import android.view.*;
 
 /** Exercises real View dispatch with distinct synthetic pen and finger devices. */
 public final class CanvasTestRunner extends Instrumentation {
-    private long time;private float pressure=.65f;private boolean perf;
-    @Override public void onCreate(Bundle args){super.onCreate(args);perf=args!=null&&"true".equals(args.getString("perf"));start();}
+    private long time;private float pressure=.65f;private boolean perf;private Bundle options;
+    @Override public void onCreate(Bundle args){super.onCreate(args);options=args;perf=args!=null&&"true".equals(args.getString("perf"));start();}
     private void check(boolean value,String message){if(!value)throw new AssertionError(message);}
     private void event(CanvasView view,int tool,int action,float... xy){
         int n=xy.length/2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[n];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[n];
@@ -22,7 +22,7 @@ public final class CanvasTestRunner extends Instrumentation {
             android.graphics.Canvas c=target.node.beginRecording(v.getWidth(),v.getHeight());v.draw(c);target.node.endRecording();return target.copy();
         }
     }
-    @Override public void onStart(){if(perf){CanvasPerfRunner.run(this);return;}Bundle result=new Bundle();try{
+    @Override public void onStart(){if(perf){CanvasPerfRunner.run(this,options);return;}Bundle result=new Bundle();try{
         runOnMainSync(()->{
             CanvasView v=new CanvasView(getTargetContext(),new Ink());
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
@@ -58,9 +58,11 @@ public final class CanvasTestRunner extends Instrumentation {
             check(d.strokes.size()==1,"pressure-varying pen stroke missing");for(int i=2;i<d.strokes.get(0).points.length;i+=3)check(d.strokes.get(0).points[i]==1,"writing must ignore pressure");
             v.setEraserSize(40);v.tool(CanvasView.ERASE);pressure=.1f;
             pen(v,MotionEvent.ACTION_DOWN,650,960);pen(v,MotionEvent.ACTION_MOVE,650,1040);pen(v,MotionEvent.ACTION_UP,650,1040);
-            check(d.strokes.size()==2,"swept eraser did not split the line");double lightGap=d.strokes.get(1).left-d.strokes.get(0).right;
+            android.graphics.Bitmap erased=android.graphics.Bitmap.createBitmap(v.getWidth(),v.getHeight(),android.graphics.Bitmap.Config.ARGB_8888);v.draw(new android.graphics.Canvas(erased));
+            check(erased.getPixel(650,1000)!=inkColor,"swept eraser skipped ink between events");check(erased.getPixel(675,1000)==inkColor,"light eraser removed too much ink");erased.recycle();
             d.undo();pressure=1;pen(v,MotionEvent.ACTION_DOWN,650,960);pen(v,MotionEvent.ACTION_MOVE,650,1040);pen(v,MotionEvent.ACTION_UP,650,1040);
-            check(d.strokes.size()==2,"firm eraser removed unrelated line portions");check(d.strokes.get(1).left-d.strokes.get(0).right>lightGap,"firm pressure must enlarge erasure");
+            erased=android.graphics.Bitmap.createBitmap(v.getWidth(),v.getHeight(),android.graphics.Bitmap.Config.ARGB_8888);v.draw(new android.graphics.Canvas(erased));
+            check(erased.getPixel(675,1000)!=inkColor,"firm pressure must enlarge erasure");check(erased.getPixel(750,1000)==inkColor,"firm eraser removed unrelated ink");erased.recycle();
             java.util.List<Ink.Stroke> before=new java.util.ArrayList<>(d.strokes);pen(v,MotionEvent.ACTION_DOWN,530,1000);pen(v,MotionEvent.ACTION_MOVE,550,1000);pen(v,MotionEvent.ACTION_CANCEL,550,1000);check(before.equals(d.strokes),"canceled partial erase did not restore exact fragments");
             if(Build.VERSION.SDK_INT>=29){
                 d.strokes.clear();v.tool(CanvasView.PEN);d.add(new Ink.Stroke(d.nextId(),inkColor,5,450,1100,new float[]{0,0,1,200,0,1}));v.refresh();
