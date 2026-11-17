@@ -16,7 +16,7 @@ public final class MainActivity extends Activity {
     private final Map<Integer,Swatch> swatches=new LinkedHashMap<>();
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private GradientDrawable bg(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
-    @Override public void onCreate(Bundle state){super.onCreate(state);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);Ink ink=getLastNonConfigurationInstance() instanceof Ink?(Ink)getLastNonConfigurationInstance():new Ink();build(ink);}
+    @Override public void onCreate(Bundle state){super.onCreate(state);if(Build.VERSION.SDK_INT>=27)getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);Ink ink=getLastNonConfigurationInstance() instanceof Ink?(Ink)getLastNonConfigurationInstance():new Ink();build(ink);}
     @Override public Object onRetainNonConfigurationInstance(){return canvas.ink;}
     private TextView action(String title,Runnable clicked){TextView t=new TextView(this);t.setText(title);t.setTextSize(14);t.setTextColor(INK);t.setGravity(Gravity.CENTER);t.setPadding(dp(14),0,dp(14),0);t.setMinWidth(dp(48));t.setContentDescription(title);t.setOnClickListener(v->clicked.run());return t;}
     private void add(LinearLayout row,View child,int width){row.addView(child,new LinearLayout.LayoutParams(width<0?width:dp(width),dp(44)));}
