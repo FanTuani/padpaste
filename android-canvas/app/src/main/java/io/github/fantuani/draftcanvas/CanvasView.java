@@ -45,6 +45,7 @@ public final class CanvasView extends View {
         MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();coords.x=x;coords.y=y;coords.pressure=pressure;
         long time=android.os.SystemClock.uptimeMillis();MotionEvent e=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,1,new MotionEvent.PointerProperties[]{prop},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,InputDevice.SOURCE_STYLUS,0);beginPen(e,0);e.recycle();
     }
+    public void undo(){if(penId!=-1)finishPen();ink.undo();refresh();}
     public void refresh(){postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
@@ -91,7 +92,7 @@ public final class CanvasView extends View {
     private void beginPen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);lastTool=e.getToolType(i);
         penId=e.getPointerId(i);fingers=false;lastPen=e.getEventTime();startX=wx(e.getX(i));startY=wy(e.getY(i));dragX=dragY=0;
-        erasing=temporaryEraser||mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER||(e.getButtonState()&MotionEvent.BUTTON_STYLUS_PRIMARY)!=0;
+        erasing=temporaryEraser||mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER;
         if(erasing){ink.begin();erase(startX,startY);return;}
         if(mode==SELECT){double[] box=ink.selectionBounds();dragging=box!=null&&startX>=box[0]&&startX<=box[2]&&startY>=box[1]&&startY<=box[3];marquee=!dragging;if(marquee){ink.selected.clear();dragX=startX;dragY=startY;}return;}
         samples.clear();strokeX=startX;strokeY=startY;strokeColor=color;strokeWidth=width;append(e.getX(i),e.getY(i),e.getPressure(i));
