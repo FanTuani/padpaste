@@ -91,8 +91,8 @@ public final class CanvasView extends View {
         Path outline=new Path();
         if(previous!=null&&previous.filled&&previous.points==s.points)outline.set(previous.path);
         else {
-        if(s.pathPoints().length==3)outline.addCircle(s.points[0],s.points[1],s.width/2,Path.Direction.CW);
-        else paint.getFillPath(center,outline);
+            if(s.pathPoints().length==3){outline.addCircle(s.points[0],s.points[1],s.width/2,Path.Direction.CW);}
+            else {paint.getFillPath(center,outline);}
             if(previous!=null&&previous.filled)outline.op(previous.path,Path.Op.INTERSECT);
         }
         Path mask=new Path();
@@ -112,7 +112,7 @@ public final class CanvasView extends View {
         paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
         RenderState state=s.renderState instanceof RenderState?(RenderState)s.renderState:null;
         if(state==null){RenderState previous=s.previousRender instanceof RenderState?(RenderState)s.previousRender:null;
-            Path path=centerline(s);if(s.cuts!=null)path=cutOutline(s,path,previous);state=new RenderState(path,s);
+            Path path=previous!=null&&previous.filled&&previous.points==s.points?null:centerline(s);if(s.cuts!=null)path=cutOutline(s,path,previous);state=new RenderState(path,s);
             if(s.id!=0){s.renderState=state;s.previousRender=null;}}
         Path path=state.path;
         if(s.cuts!=null)paint.setStyle(Paint.Style.FILL);c.drawPath(path,paint);
