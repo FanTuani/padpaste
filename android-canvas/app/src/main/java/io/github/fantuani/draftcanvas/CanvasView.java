@@ -12,9 +12,14 @@ public final class CanvasView extends View {
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private static final class SectionKey {
+        final double a,b;SectionKey(double a,double b){this.a=a;this.b=b;}
+        @Override public boolean equals(Object other){return other instanceof SectionKey&&((SectionKey)other).a==a&&((SectionKey)other).b==b;}
+        @Override public int hashCode(){return Double.hashCode(a)*31+Double.hashCode(b);}
+    }
     private static final class RenderState {
-        final Path path,mask;final Ink.Cut cut;final float[] points;
-        RenderState(Path path,Path mask,Ink.Stroke stroke){this.path=path;this.mask=mask;cut=stroke.cuts;points=stroke.points;}
+        final Map<SectionKey,Path> partial=new HashMap<>(),previous;
+        RenderState(RenderState previous){this.previous=previous==null?Collections.emptyMap():previous.partial;}
     }
     private float[] gridPoints;private int gridCount,gridWidth,gridHeight;
     private double gridX=Double.NaN,gridY,gridScale;
@@ -63,7 +68,7 @@ public final class CanvasView extends View {
         if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
-        if(!samples.isEmpty()&&!erasing&&!dragging&&!marquee)drawStroke(c,activeStroke(),0,0);
+        if(!samples.isEmpty()&&!erasing&&!dragging&&!marquee)drawStroke(c,activeStroke(),0,0,wx(0)-strokeX,wy(0)-strokeY,wx(getWidth())-strokeX,wy(getHeight())-strokeY);
         double[] bounds=ink.selectionBounds();
         if(marquee)bounds=new double[]{Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY)};
         else if(bounds!=null){bounds[0]+=dragX;bounds[2]+=dragX;bounds[1]+=dragY;bounds[3]+=dragY;}
@@ -82,7 +87,7 @@ public final class CanvasView extends View {
     }
     private void drawInk(android.graphics.Canvas c,int left,int top,int right,int bottom){
         double l=wx(left),t=wy(top),r=wx(right),b=wy(bottom);
-        for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy);}
+        for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy,l-dx-s.x,t-dy-s.y,r-dx-s.x,b-dy-s.y);}
     }
     @Override protected void onDetachedFromWindow(){if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
@@ -102,25 +107,30 @@ public final class CanvasView extends View {
         for(int i=3;i<points.length;i+=3)path.lineTo(points[i],points[i+1]);
         return path;
     }
-    private Path eraserMask(Ink.Stroke s,RenderState previous){
-        Path mask=previous!=null&&previous.mask!=null?new Path(previous.mask):new Path();
-        for(Ink.Cut cut=s.cuts;cut!=null&&(previous==null||cut!=previous.cut);cut=cut.previous){
-            if(Math.max(cut.ax,cut.bx)+cut.radius<s.left-s.x||Math.min(cut.ax,cut.bx)-cut.radius>s.right-s.x||Math.max(cut.ay,cut.by)+cut.radius<s.top-s.y||Math.min(cut.ay,cut.by)-cut.radius>s.bottom-s.y)continue;
-            float ax=(float)cut.ax,ay=(float)cut.ay,bx=(float)cut.bx,by=(float)cut.by,r=(float)cut.radius;
-            mask.addCircle(ax,ay,r,Path.Direction.CW);mask.addCircle(bx,by,r,Path.Direction.CW);
-            double length=Math.hypot(bx-ax,by-ay);
-            if(length>1e-6){float nx=(float)(-(by-ay)/length*r),ny=(float)((bx-ax)/length*r);mask.moveTo(ax-nx,ay-ny);mask.lineTo(bx-nx,by-ny);mask.lineTo(bx+nx,by+ny);mask.lineTo(ax+nx,ay+ny);mask.close();}
-        }return mask;
+    private Path sectionPath(StrokeData data,double start,double end){
+        Path path=new Path();path.moveTo(data.coordinate(start,0),data.coordinate(start,1));
+        for(int i=(int)Math.floor(start)+1;i<end;i++)path.lineTo(data.points[i*3],data.points[i*3+1]);
+        path.lineTo(data.coordinate(end,0),data.coordinate(end,1));return path;
     }
-    private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy){
+    private void drawSections(android.graphics.Canvas c,Ink.Stroke s,StrokeData data,StrokeData.Node node,double l,double t,double r,double b){
+        float padding=s.width/2;
+        if(node.right+padding<l||node.left-padding>r||node.bottom+padding<t||node.top-padding>b||!StrokeData.visible(s.sections,node.start,node.end))return;
+        int index=s.sections==null?0:StrokeData.first(s.sections,node.start);
+        boolean full=s.sections==null||index<s.sections.length&&s.sections[index]<=node.start&&s.sections[index+1]>=node.end;
+        if(full&&((node.left>=l&&node.right<=r&&node.top>=t&&node.bottom<=b)||node.end-node.start<=32)){
+            if(node.renderPath==null)node.renderPath=sectionPath(data,node.start,node.end);c.drawPath((Path)node.renderPath,paint);return;
+        }
+        if(node.a!=null){drawSections(c,s,data,node.a,l,t,r,b);drawSections(c,s,data,node.b,l,t,r,b);return;}
+        if(s.sections==null){if(node.renderPath==null)node.renderPath=sectionPath(data,node.start,node.end);c.drawPath((Path)node.renderPath,paint);return;}
+        RenderState state=s.renderState instanceof RenderState?(RenderState)s.renderState:new RenderState(s.previousRender instanceof RenderState?(RenderState)s.previousRender:null);s.renderState=state;s.previousRender=null;
+        for(int i=index;i<s.sections.length&&s.sections[i]<node.end;i+=2){double a=Math.max(node.start,s.sections[i]),z=Math.min(node.end,s.sections[i+1]);if(z-a<1e-9)continue;SectionKey key=new SectionKey(a,z);Path p=state.partial.get(key);if(p==null){p=state.previous.get(key);if(p==null)p=sectionPath(data,a,z);state.partial.put(key,p);}c.drawPath(p,paint);}
+    }
+    private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy,double l,double t,double r,double b){
         c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
         paint.setColor(s.color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(s.width);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
-        RenderState state=s.renderState instanceof RenderState?(RenderState)s.renderState:null;
-        if(state==null){RenderState previous=s.previousRender instanceof RenderState?(RenderState)s.previousRender:null;
-            Path path=previous!=null&&previous.points==s.points?previous.path:centerline(s);
-            state=new RenderState(path,s.cuts==null?null:eraserMask(s,previous),s);if(s.id!=0){s.renderState=state;s.previousRender=null;}}
-        if(state.mask!=null)c.clipOutPath(state.mask);c.drawPath(state.path,paint);
-        if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}c.restore();
+        if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
+        else if(s.id==0)c.drawPath(centerline(s),paint);
+        else {StrokeData data=s.data();drawSections(c,s,data,data.root,l,t,r,b);}c.restore();
     }
     private Ink.Stroke activeStroke(){float[] p=new float[samples.size()];for(int i=0;i<p.length;i++)p[i]=samples.get(i);return new Ink.Stroke(0,strokeColor,strokeWidth,strokeX,strokeY,p);}
     private void append(float x,float y,float pressure){
@@ -146,7 +156,7 @@ public final class CanvasView extends View {
     private void erase(double x,double y,float pressure){
         cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(pressure,eraserSensitivity));double radius=cursorRadius/ink.view.scale;
         double ax=erasePoint?eraseX:x,ay=erasePoint?eraseY:y,r=erasePoint?Math.max(radius,eraseRadius):radius;
-        if(ink.erase(ax,ay,x,y,r)&&tiles!=null)tiles.invalidate(screenX(Math.min(ax,x)-r)-2,screenY(Math.min(ay,y)-r)-2,screenX(Math.max(ax,x)+r)+2,screenY(Math.max(ay,y)+r)+2);
+        if(ink.erase(ax,ay,x,y,r)&&tiles!=null){double dirty=r+ink.erasePadding;tiles.invalidate(screenX(Math.min(ax,x)-dirty)-2,screenY(Math.min(ay,y)-dirty)-2,screenX(Math.max(ax,x)+dirty)+2,screenY(Math.max(ay,y)+dirty)+2);}
         erasePoint=true;eraseX=x;eraseY=y;eraseRadius=radius;
     }
     private void finishPen(){

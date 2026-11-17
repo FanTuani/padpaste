@@ -18,14 +18,16 @@ public final class CanvasPerfRunner extends Instrumentation {
         }
         Bitmap bitmap=Bitmap.createBitmap(2880,1740,Bitmap.Config.ARGB_8888);Canvas target=new Canvas(bitmap);view.draw(target);
         GpuTarget hardware=new GpuTarget(2880,1740);android.graphics.RenderNode node=hardware.node;
-        long[] model=new long[80],draw=new long[80],gpu=new long[80];d.begin();
-        for(int i=0;i<80;i++){
-            double x=dense?1000+i*5:180+i*31;long t=System.nanoTime();d.erase(x-(dense?5:31),850,x,850,85);model[i]=System.nanoTime()-t;
-            view.invalidateErasedArea((float)(x-(dense?5:31)-85),765,(float)(x+85),935);
+        Canvas warm=node.beginRecording(2880,1740);view.draw(warm);node.endRecording();hardware.present().close();
+        int frames=dense?24:80,completed=0;long started=System.nanoTime();
+        long[] model=new long[frames],draw=new long[frames],gpu=new long[frames];d.begin();
+        for(int i=0;i<frames;i++){
+            double x=dense?850+i*25:180+i*31;long t=System.nanoTime();d.erase(x-(dense?25:31),850,x,850,85);model[i]=System.nanoTime()-t;
+            view.invalidateErasedArea((float)(x-(dense?25:31)-85),765,(float)(x+85),935);
             t=System.nanoTime();Canvas record=node.beginRecording(2880,1740);view.draw(record);node.endRecording();draw[i]=System.nanoTime()-t;
-            t=System.nanoTime();android.media.Image image=hardware.present();image.close();gpu[i]=System.nanoTime()-t;
+            t=System.nanoTime();android.media.Image image=hardware.present();image.close();gpu[i]=System.nanoTime()-t;completed++;if(System.nanoTime()-started>15_000_000_000L)break;
         }
-        d.commit();bitmap.recycle();hardware.close();Arrays.sort(model);Arrays.sort(draw);Arrays.sort(gpu);
-        result.putString("stream",String.format(Locale.ROOT,"strokes=%d overlapping=%s frames=80 model p50=%.2f p95=%.2f max=%.2f ms; record p50=%.2f p95=%.2f max=%.2f ms; GPU present p50=%.2f p95=%.2f max=%.2f ms; remaining=%d\n",count,dense,model[40]/1e6,model[76]/1e6,model[79]/1e6,draw[40]/1e6,draw[76]/1e6,draw[79]/1e6,gpu[40]/1e6,gpu[76]/1e6,gpu[79]/1e6,d.strokes.size()));
+        d.commit();bitmap.recycle();hardware.close();Arrays.sort(model,0,completed);Arrays.sort(draw,0,completed);Arrays.sort(gpu,0,completed);int mid=completed/2,high=Math.min(completed-1,(int)(completed*.95)),last=completed-1;
+        result.putString("stream",String.format(Locale.ROOT,"strokes=%d overlapping=%s frames=%d model p50=%.2f p95=%.2f max=%.2f ms; record p50=%.2f p95=%.2f max=%.2f ms; GPU present p50=%.2f p95=%.2f max=%.2f ms; remaining=%d\n",count,dense,completed,model[mid]/1e6,model[high]/1e6,model[last]/1e6,draw[mid]/1e6,draw[high]/1e6,draw[last]/1e6,gpu[mid]/1e6,gpu[high]/1e6,gpu[last]/1e6,d.strokes.size()));
     });runner.finish(Activity.RESULT_OK,result);}catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}}
 }

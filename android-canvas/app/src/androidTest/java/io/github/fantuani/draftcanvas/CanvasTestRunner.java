@@ -46,11 +46,11 @@ public final class CanvasTestRunner extends Instrumentation {
             android.graphics.Bitmap bitmap=android.graphics.Bitmap.createBitmap(v.getWidth(),v.getHeight(),android.graphics.Bitmap.Config.ARGB_8888);
             v.draw(new android.graphics.Canvas(bitmap));
             check(bitmap.getPixel(600,807)!=inkColor,"circle failed to subtract thick ink edge");
-            check(bitmap.getPixel(600,795)==inkColor,"circle removed ink outside its boundary");
+            check(bitmap.getPixel(593,800)==inkColor&&bitmap.getPixel(593,808)!=inkColor,"erased endpoint must retain a rounded cap");
             check(bitmap.getPixel(550,800)==inkColor,"local eraser removed the rest of the stroke");
             d.begin();d.erase(700,807,700,807,5);d.commit();v.draw(new android.graphics.Canvas(bitmap));
             check(bitmap.getPixel(600,807)!=inkColor&&bitmap.getPixel(700,807)!=inkColor,"incremental render lost a previous or current cut");
-            check(bitmap.getPixel(700,795)==inkColor,"incremental render removed ink outside the circle");
+            check(bitmap.getPixel(693,800)==inkColor&&bitmap.getPixel(693,808)!=inkColor,"second erasure did not retain rounded caps");
             d.undo();v.draw(new android.graphics.Canvas(bitmap));check(bitmap.getPixel(600,807)!=inkColor&&bitmap.getPixel(700,807)==inkColor,"undo did not preserve earlier cut");
             d.undo();v.draw(new android.graphics.Canvas(bitmap));check(bitmap.getPixel(600,807)==inkColor,"undo did not restore erased ink");bitmap.recycle();
             d.strokes.clear();v.tool(CanvasView.PEN);pressure=.1f;time+=1000;
