@@ -29,4 +29,4 @@ Debug 包名带 `.debug`，可与正式版共存；小米按键免拦截需用�
 
 测试使用合成笔/触摸事件验证 View 交互和局部擦除绘制；实际小米笔的压力与手掌检测仍需真笔体验确认。
 
-擦除采用共享采样点、可见区间和笔段包围盒树，分区缓存重绘；设计参考 [Xournal++ 的区间式擦除](https://github.com/xournalpp/xournalpp/blob/master/src/core/model/eraser/ErasableStroke.cpp)，使用独立 Java 实现。
+擦除采用共享采样点、可见区间和笔段包围盒树，后台分区栅格缓存、前台即时擦除预览；设计参考 [Xournal++ 的区间式擦除](https://github.com/xournalpp/xournalpp/blob/master/src/core/model/eraser/ErasableStroke.cpp)，使用独立 Java 实现。

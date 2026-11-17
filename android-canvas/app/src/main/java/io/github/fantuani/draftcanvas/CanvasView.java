@@ -23,6 +23,7 @@ public final class CanvasView extends View {
     }
     private float[] gridPoints;private int gridCount,gridWidth,gridHeight;
     private double gridX=Double.NaN,gridY,gridScale;
+    boolean testAsync;private AsyncInkTiles raster;
     private final InkTiles tiles=Build.VERSION.SDK_INT>=29?new InkTiles():null;
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
     private long lastPen;
@@ -62,10 +63,13 @@ public final class CanvasView extends View {
     public void setEraserSize(float size){eraserSize=size;cursorRadius=size/2;postInvalidateOnAnimation();}
     public void undo(){if(penId!=-1)finishPen();ink.undo();refresh();}
     private void refreshOverlay(){postInvalidateOnAnimation();changed.run();}
-    public void refresh(){if(tiles!=null)tiles.invalidateAll();postInvalidateOnAnimation();changed.run();}
+    public void refresh(){if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
-        if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
+        if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
+            if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
+            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density,gridPoints,gridCount));
+        }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
         if(!samples.isEmpty()&&!erasing&&!dragging&&!marquee)drawStroke(c,activeStroke(),0,0,wx(0)-strokeX,wy(0)-strokeY,wx(getWidth())-strokeX,wy(getHeight())-strokeY);
@@ -89,7 +93,7 @@ public final class CanvasView extends View {
         double l=wx(left),t=wy(top),r=wx(right),b=wy(bottom);
         for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy,l-dx-s.x,t-dy-s.y,r-dx-s.x,b-dy-s.y);}
     }
-    @Override protected void onDetachedFromWindow(){if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
+    @Override protected void onDetachedFromWindow(){if(raster!=null){raster.close();raster=null;}if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
     private void drawGrid(android.graphics.Canvas c){
         if(gridPoints==null||gridX!=ink.view.x||gridY!=ink.view.y||gridScale!=ink.view.scale||gridWidth!=getWidth()||gridHeight!=getHeight()){
@@ -148,7 +152,12 @@ public final class CanvasView extends View {
     private void movePen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);
         lastPen=e.getEventTime();double x=wx(e.getX(i)),y=wy(e.getY(i));
-        if(erasing){for(int h=0;h<e.getHistorySize();h++)erase(wx(e.getHistoricalX(i,h)),wy(e.getHistoricalY(i,h)),e.getHistoricalPressure(i,h));erase(x,y,e.getPressure(i));}
+        if(erasing){
+            boolean straight=erasePoint;float maxPressure=e.getPressure(i);double tolerance=dp(.4f)/ink.view.scale;
+            for(int h=0;h<e.getHistorySize();h++){maxPressure=Math.max(maxPressure,e.getHistoricalPressure(i,h));if(!erasePoint||Eraser.distanceSquared(wx(e.getHistoricalX(i,h)),wy(e.getHistoricalY(i,h)),eraseX,eraseY,x,y)>tolerance*tolerance)straight=false;}
+            if(straight)erase(x,y,maxPressure);else {for(int h=0;h<e.getHistorySize();h++)erase(wx(e.getHistoricalX(i,h)),wy(e.getHistoricalY(i,h)),e.getHistoricalPressure(i,h));erase(x,y,e.getPressure(i));}
+            cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(e.getPressure(i),eraserSensitivity));
+        }
         else if(dragging){dragX=x-startX;dragY=y-startY;}
         else if(marquee){dragX=x;dragY=y;}
         else {for(int h=0;h<e.getHistorySize();h++)append(e.getHistoricalX(i,h),e.getHistoricalY(i,h),e.getHistoricalPressure(i,h));append(e.getX(i),e.getY(i),e.getPressure(i));}
@@ -156,16 +165,23 @@ public final class CanvasView extends View {
     private void erase(double x,double y,float pressure){
         cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(pressure,eraserSensitivity));double radius=cursorRadius/ink.view.scale;
         double ax=erasePoint?eraseX:x,ay=erasePoint?eraseY:y,r=erasePoint?Math.max(radius,eraseRadius):radius;
-        if(ink.erase(ax,ay,x,y,r)&&tiles!=null){double dirty=r+ink.erasePadding;tiles.invalidate(screenX(Math.min(ax,x)-dirty)-2,screenY(Math.min(ay,y)-dirty)-2,screenX(Math.max(ax,x)+dirty)+2,screenY(Math.max(ay,y)+dirty)+2);}
+        eraseWorld(ax,ay,x,y,r);
         erasePoint=true;eraseX=x;eraseY=y;eraseRadius=radius;
     }
+    void eraseWorld(double ax,double ay,double bx,double by,double radius){
+        if(!ink.erase(ax,ay,bx,by,radius))return;double dirty=radius+ink.erasePadding;
+        if(tiles!=null)tiles.invalidate(screenX(Math.min(ax,bx)-dirty)-2,screenY(Math.min(ay,by)-dirty)-2,screenX(Math.max(ax,bx)+dirty)+2,screenY(Math.max(ay,by)+dirty)+2);
+        if(raster!=null)raster.erase(ink,ax,ay,bx,by,radius,ink.erasePadding);
+    }
+    void closeRaster(){if(raster!=null){raster.close();raster=null;}}
+    boolean rasterReady(){return raster!=null&&raster.ready();}
     private void finishPen(){
         boolean erased=erasing,added=false;
         if(erasing)ink.commit();else if(dragging)ink.move(dragX,dragY);else if(marquee)ink.select(Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY));
-        else if(!samples.isEmpty()){Ink.Stroke s=activeStroke();ink.add(new Ink.Stroke(ink.nextId(),s.color,s.width,s.x,s.y,s.points));added=true;invalidateErasedArea(screenX(s.left),screenY(s.top),screenX(s.right),screenY(s.bottom));}
-        samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased||added){postInvalidateOnAnimation();changed.run();}else refresh();
+        else if(!samples.isEmpty()){Ink.Stroke s=activeStroke();Ink.Stroke committed=new Ink.Stroke(ink.nextId(),s.color,s.width,s.x,s.y,s.points);ink.add(committed);if(raster!=null)raster.stroke(ink,committed);added=true;invalidateErasedArea(screenX(s.left),screenY(s.top),screenX(s.right),screenY(s.bottom));}
+        samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased||added){if(raster!=null)raster.noteRevision(ink);postInvalidateOnAnimation();changed.run();}else refresh();
     }
-    private void cancelPen(){if(erasing){ink.cancel();if(tiles!=null)tiles.invalidateAll();}samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
+    private void cancelPen(){if(erasing){ink.cancel();if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);}samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
     @Override public boolean onHoverEvent(MotionEvent e){
         if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){
             nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;lastPen=e.getEventTime();

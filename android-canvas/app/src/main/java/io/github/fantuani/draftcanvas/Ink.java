@@ -58,15 +58,16 @@ public final class Ink {
     private final ArrayDeque<List<Stroke>> undo=new ArrayDeque<>(),redo=new ArrayDeque<>();
     private List<Stroke> transaction;
     private List<Stroke> clipboard=Collections.emptyList();
+    long revision;
     private long nextId=1;
     public long nextId(){return nextId++;}
     public void begin(){if(transaction==null)transaction=new ArrayList<>(strokes);}
-    public void commit(){if(transaction!=null&&!transaction.equals(strokes)){undo.addLast(transaction);while(undo.size()>100)undo.removeFirst();redo.clear();}transaction=null;}
-    public void cancel(){if(transaction!=null){strokes.clear();strokes.addAll(transaction);transaction=null;}}
+    public void commit(){if(transaction!=null&&!transaction.equals(strokes)){undo.addLast(transaction);while(undo.size()>100)undo.removeFirst();redo.clear();revision++;}transaction=null;}
+    public void cancel(){if(transaction!=null){strokes.clear();strokes.addAll(transaction);revision++;transaction=null;}}
     public void add(Stroke s){begin();strokes.add(s);commit();}
     public boolean canUndo(){return !undo.isEmpty();}public boolean canRedo(){return !redo.isEmpty();}
-    public void undo(){if(!undo.isEmpty()){redo.addLast(new ArrayList<>(strokes));strokes.clear();strokes.addAll(undo.removeLast());selected.clear();}}
-    public void redo(){if(!redo.isEmpty()){undo.addLast(new ArrayList<>(strokes));strokes.clear();strokes.addAll(redo.removeLast());selected.clear();}}
+    public void undo(){if(!undo.isEmpty()){redo.addLast(new ArrayList<>(strokes));strokes.clear();strokes.addAll(undo.removeLast());selected.clear();revision++;}}
+    public void redo(){if(!redo.isEmpty()){undo.addLast(new ArrayList<>(strokes));strokes.clear();strokes.addAll(redo.removeLast());selected.clear();revision++;}}
     public void select(double l,double t,double r,double b){selected.clear();for(Stroke s:strokes)if(s.crossesRect(l,t,r,b))selected.add(s.id);}
     public double[] selectionBounds(){double l=Double.POSITIVE_INFINITY,t=l,r=-l,b=-l;for(Stroke s:strokes)if(selected.contains(s.id)){l=Math.min(l,s.left);r=Math.max(r,s.right);t=Math.min(t,s.top);b=Math.max(b,s.bottom);}return selected.isEmpty()?null:new double[]{l,t,r,b};}
     public void move(double dx,double dy){if(selected.isEmpty()||(dx==0&&dy==0))return;begin();for(int i=0;i<strokes.size();i++){Stroke s=strokes.get(i);if(selected.contains(s.id))strokes.set(i,s.offset(s.id,dx,dy));}commit();}
@@ -93,7 +94,7 @@ public final class Ink {
             if(next==null){next=new ArrayList<>(strokes.size());next.addAll(strokes.subList(0,index));}
             erasePadding=Math.max(erasePadding,s.width);selected.remove(s.id);if(sections.length>0)next.add(new Stroke(nextId(),s,sections));index++;
         }
-        if(next==null)return false;strokes.clear();strokes.addAll(next);return true;
+        if(next==null)return false;strokes.clear();strokes.addAll(next);revision++;return true;
     }
     public void clear(){if(strokes.isEmpty())return;begin();strokes.clear();selected.clear();commit();}
 }
