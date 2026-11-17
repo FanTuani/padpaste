@@ -18,10 +18,9 @@ public final class CanvasTestRunner extends Instrumentation {
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
     @android.annotation.TargetApi(29)
     private android.graphics.Bitmap snapshot(CanvasView v){
-        android.graphics.RenderNode node=new android.graphics.RenderNode("verify-tiles");node.setPosition(0,0,v.getWidth(),v.getHeight());
-        android.graphics.Canvas c=node.beginRecording(v.getWidth(),v.getHeight());v.draw(c);node.endRecording();
-        android.graphics.Bitmap gpu=android.graphics.HardwareRenderer.createHardwareBitmap(node,v.getWidth(),v.getHeight());
-        android.graphics.Bitmap bitmap=gpu.copy(android.graphics.Bitmap.Config.ARGB_8888,false);gpu.recycle();node.discardDisplayList();return bitmap;
+        try(GpuTarget target=new GpuTarget(v.getWidth(),v.getHeight())){
+            android.graphics.Canvas c=target.node.beginRecording(v.getWidth(),v.getHeight());v.draw(c);target.node.endRecording();return target.copy();
+        }
     }
     @Override public void onStart(){if(perf){CanvasPerfRunner.run(this);return;}Bundle result=new Bundle();try{
         runOnMainSync(()->{
