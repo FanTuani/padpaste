@@ -7,7 +7,7 @@ import android.graphics.*;
 @TargetApi(29)
 final class InkTiles {
     interface Drawer { void draw(Canvas canvas,int left,int top,int right,int bottom); }
-    private static final int SIZE=512;
+    private static final int SIZE=256;
     private RenderNode[] nodes;private boolean[] dirty;private int columns,rows,width,height;
     private double x=Double.NaN,y,scale;
     void invalidateAll(){if(dirty!=null)java.util.Arrays.fill(dirty,true);}

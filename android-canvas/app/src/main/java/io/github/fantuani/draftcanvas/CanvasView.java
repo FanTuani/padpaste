@@ -16,6 +16,8 @@ public final class CanvasView extends View {
         final Path path;final Ink.Cut cut;final float[] points;final boolean filled;
         RenderState(Path path,Ink.Stroke stroke){this.path=path;cut=stroke.cuts;points=stroke.points;filled=cut!=null;}
     }
+    private float[] gridPoints;private int gridCount,gridWidth,gridHeight;
+    private double gridX=Double.NaN,gridY,gridScale;
     private final InkTiles tiles=Build.VERSION.SDK_INT>=29?new InkTiles():null;
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
     private long lastPen;
@@ -85,10 +87,14 @@ public final class CanvasView extends View {
     @Override protected void onDetachedFromWindow(){if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
     private void drawGrid(android.graphics.Canvas c){
-        double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
-        double pixels=step*ink.view.scale;float x0=(float)((getWidth()/2.0-((ink.view.x%step)+step)%step*ink.view.scale)%pixels),y0=(float)((getHeight()/2.0-((ink.view.y%step)+step)%step*ink.view.scale)%pixels);
-        paint.setStyle(Paint.Style.FILL);paint.setColor(0xFFB9C4BC);
-        for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels)c.drawCircle(x,y,dp(.8f),paint);
+        if(gridPoints==null||gridX!=ink.view.x||gridY!=ink.view.y||gridScale!=ink.view.scale||gridWidth!=getWidth()||gridHeight!=getHeight()){
+            gridX=ink.view.x;gridY=ink.view.y;gridScale=ink.view.scale;gridWidth=getWidth();gridHeight=getHeight();
+            double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
+            double pixels=step*ink.view.scale;float x0=(float)((getWidth()/2.0-((ink.view.x%step)+step)%step*ink.view.scale)%pixels),y0=(float)((getHeight()/2.0-((ink.view.y%step)+step)%step*ink.view.scale)%pixels);
+            gridPoints=new float[((int)Math.ceil(getWidth()/pixels)+2)*((int)Math.ceil(getHeight()/pixels)+2)*2];gridCount=0;
+            for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels){gridPoints[gridCount++]=x;gridPoints[gridCount++]=y;}
+        }
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeWidth(dp(1.6f));paint.setColor(0xFFB9C4BC);c.drawPoints(gridPoints,0,gridCount,paint);
     }
     private Path centerline(Ink.Stroke s){
         float[] points=s.pathPoints();
@@ -98,11 +104,11 @@ public final class CanvasView extends View {
     }
     private Path cutOutline(Ink.Stroke s,Path center,RenderState previous){
         Path outline=new Path();
+        if(previous!=null&&previous.points!=s.points)previous=null;
         if(previous!=null&&previous.filled&&previous.points==s.points)outline.set(previous.path);
         else {
             if(s.pathPoints().length==3){outline.addCircle(s.points[0],s.points[1],s.width/2,Path.Direction.CW);}
             else {paint.getFillPath(center,outline);}
-            if(previous!=null&&previous.filled)outline.op(previous.path,Path.Op.INTERSECT);
         }
         Path mask=new Path();
         for(Ink.Cut cut=s.cuts;cut!=null&&(previous==null||cut!=previous.cut);cut=cut.previous){
@@ -156,10 +162,10 @@ public final class CanvasView extends View {
         erasePoint=true;eraseX=x;eraseY=y;eraseRadius=radius;
     }
     private void finishPen(){
-        boolean erased=erasing;
+        boolean erased=erasing,added=false;
         if(erasing)ink.commit();else if(dragging)ink.move(dragX,dragY);else if(marquee)ink.select(Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY));
-        else if(!samples.isEmpty()){Ink.Stroke s=activeStroke();ink.add(new Ink.Stroke(ink.nextId(),s.color,s.width,s.x,s.y,s.points));}
-        samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased){postInvalidateOnAnimation();changed.run();}else refresh();
+        else if(!samples.isEmpty()){Ink.Stroke s=activeStroke();ink.add(new Ink.Stroke(ink.nextId(),s.color,s.width,s.x,s.y,s.points));added=true;invalidateErasedArea(screenX(s.left),screenY(s.top),screenX(s.right),screenY(s.bottom));}
+        samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased||added){postInvalidateOnAnimation();changed.run();}else refresh();
     }
     private void cancelPen(){if(erasing){ink.cancel();if(tiles!=null)tiles.invalidateAll();}samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
     @Override public boolean onHoverEvent(MotionEvent e){
