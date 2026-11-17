@@ -32,19 +32,19 @@ public final class CanvasView extends View {
     public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);eraserSize=dp(24);setBackgroundColor(0xFFFAFAF7);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
     private float dp(float n){return n*getResources().getDisplayMetrics().density;}
     private double wx(float x){return ink.view.worldX(x,getWidth());}private double wy(float y){return ink.view.worldY(y,getHeight());}
-    public void tool(int value){cancelPen();mode=value;if(mode!=SELECT)ink.selected.clear();refresh();}
+    public void tool(int value){cancelPen();mode=value;if(mode!=SELECT)ink.selected.clear();refreshOverlay();}
     public int displayMode(){return temporaryEraser?ERASE:mode;}
     public void temporaryEraser(boolean held){
         if(temporaryEraser==held)return;
         int active=penId;float x=lastX,y=lastY,p=lastPressure;int tool=lastTool;
         if(active!=-1)finishPen();temporaryEraser=held;
         if(!held)mode=PEN;ink.selected.clear();
-        if(active!=-1)resumePen(active,x,y,p,tool);refresh();
+        if(active!=-1)resumePen(active,x,y,p,tool);refreshOverlay();
     }
     public void setPenColor(int next){
         if(color==next)return;int active=penId;float x=lastX,y=lastY,p=lastPressure;int tool=lastTool;
         boolean split=active!=-1&&!erasing;if(split)finishPen();color=next;
-        if(split)resumePen(active,x,y,p,tool);refresh();
+        if(split)resumePen(active,x,y,p,tool);refreshOverlay();
     }
     private void resumePen(int id,float x,float y,float pressure,int tool){
         MotionEvent.PointerProperties prop=new MotionEvent.PointerProperties();prop.id=id;prop.toolType=tool;
@@ -54,6 +54,7 @@ public final class CanvasView extends View {
     void invalidateErasedArea(float left,float top,float right,float bottom){if(tiles!=null)tiles.invalidate(left-2,top-2,right+2,bottom+2);}
     public void setEraserSize(float size){eraserSize=size;cursorRadius=size/2;postInvalidateOnAnimation();}
     public void undo(){if(penId!=-1)finishPen();ink.undo();refresh();}
+    private void refreshOverlay(){postInvalidateOnAnimation();changed.run();}
     public void refresh(){if(tiles!=null)tiles.invalidateAll();postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
