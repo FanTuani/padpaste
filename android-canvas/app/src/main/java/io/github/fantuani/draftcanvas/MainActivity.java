@@ -14,6 +14,7 @@ public final class MainActivity extends Activity {
     private TextView pen,select,erase,undo,redo,paste,zoom,selectionLabel;
     private LinearLayout selectionBar;
     private int lastColor;
+    private PenButtons penButtons;
     private final Map<Integer,Swatch> swatches=new LinkedHashMap<>();
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private GradientDrawable bg(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
@@ -36,12 +37,30 @@ public final class MainActivity extends Activity {
         FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);sp.bottomMargin=dp(getResources().getConfiguration().screenWidthDp<840?80:24);root.addView(selectionBar,sp);
         LinearLayout position=new LinearLayout(this);position.setGravity(Gravity.CENTER_VERTICAL);zoom=action("100%",()->{canvas.ink.view.scale=1;canvas.refresh();});zoom.setTextColor(MUTED);add(position,zoom,-2);TextView overview=action("总览",()->canvas.overview());overview.setTextColor(MUTED);add(position,overview,-2);FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(-2,dp(48),Gravity.BOTTOM|Gravity.LEFT);pp.leftMargin=dp(16);pp.bottomMargin=dp(14);root.addView(position,pp);
         TextView clear=action("清空",()->{if(ink.strokes.isEmpty())return;new AlertDialog.Builder(this).setTitle("清空草稿？").setNegativeButton("取消",null).setPositiveButton("清空",(d,w)->{ink.clear();canvas.refresh();}).show();});clear.setTextColor(MUTED);FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(72),dp(48),Gravity.BOTTOM|Gravity.RIGHT);cp.rightMargin=dp(16);cp.bottomMargin=dp(14);root.addView(clear,cp);
-        canvas.changed=this::update;setContentView(root);update();
+        canvas.changed=this::update;penButtons=new PenButtons(new PenButtons.Listener(){public void eraser(boolean held){canvas.temporaryEraser(held);}public void toggleColor(){canvas.setPenColor(canvas.color==INK?0xFFCF4941:INK);}});setContentView(root);update();
     }
+    private boolean isPenKeyboard(KeyEvent event){
+        InputDevice device=event.getDevice();if(device==null)return false;
+        String name=device.getName().toLowerCase(Locale.ROOT);
+        return name.contains("smart pen")||name.contains("stylus")||device.supportsSource(InputDevice.SOURCE_STYLUS);
+    }
+    @Override public boolean dispatchKeyEvent(KeyEvent event){
+        if(penButtons==null)return super.dispatchKeyEvent(event);
+        int key=event.getKeyCode();boolean legacy=isPenKeyboard(event);
+        boolean lower=legacy&&key==KeyEvent.KEYCODE_PAGE_DOWN,upper=legacy&&key==KeyEvent.KEYCODE_PAGE_UP;
+        if(Build.VERSION.SDK_INT>=34){lower|=key==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY;upper|=key==KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY;}
+        if((lower||upper)&&(event.getAction()==KeyEvent.ACTION_DOWN||event.getAction()==KeyEvent.ACTION_UP)){
+            boolean down=event.getAction()==KeyEvent.ACTION_DOWN;
+            if(lower)penButtons.lower(down);else penButtons.upper(down,event.getEventTime(),event.isCanceled());return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+    @Override protected void onPause(){if(penButtons!=null)penButtons.reset();super.onPause();}
+    @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(!focused&&penButtons!=null)penButtons.reset();}
     private void hint(String value){Toast.makeText(this,value,Toast.LENGTH_SHORT).show();}
     private void paste(){canvas.ink.paste(canvas.getWidth(),canvas.getHeight());canvas.mode=CanvasView.SELECT;canvas.refresh();}
     private void update(){
-        for(TextView t:new TextView[]{pen,select,erase}){boolean selected=(t==pen&&canvas.mode==CanvasView.PEN)||(t==select&&canvas.mode==CanvasView.SELECT)||(t==erase&&canvas.mode==CanvasView.ERASE);if(t.isSelected()!=selected){t.setBackground(bg(selected?0xFFE7F2EE:Color.TRANSPARENT,12));t.setTextColor(selected?TEAL:INK);t.setSelected(selected);}}
+        for(TextView t:new TextView[]{pen,select,erase}){boolean selected=(t==pen&&canvas.displayMode()==CanvasView.PEN)||(t==select&&canvas.displayMode()==CanvasView.SELECT)||(t==erase&&canvas.displayMode()==CanvasView.ERASE);if(t.isSelected()!=selected){t.setBackground(bg(selected?0xFFE7F2EE:Color.TRANSPARENT,12));t.setTextColor(selected?TEAL:INK);t.setSelected(selected);}}
         undo.setEnabled(canvas.ink.canUndo());undo.setAlpha(undo.isEnabled()?1:.3f);redo.setEnabled(canvas.ink.canRedo());redo.setAlpha(redo.isEnabled()?1:.3f);paste.setEnabled(canvas.ink.canPaste());paste.setAlpha(paste.isEnabled()?1:.3f);
         int n=canvas.ink.selected.size();selectionBar.setVisibility(n>0?View.VISIBLE:View.GONE);String label="已选 "+n+" 笔";if(!selectionLabel.getText().toString().equals(label))selectionLabel.setText(label);String z=String.format(Locale.ROOT,canvas.ink.view.scale>=.1?"%.0f%%":"%.2f%%",canvas.ink.view.scale*100);if(!zoom.getText().toString().equals(z))zoom.setText(z);
         if(lastColor!=canvas.color){lastColor=canvas.color;for(Swatch s:swatches.values())s.invalidate();}
