@@ -36,10 +36,13 @@ final class StrokeGeometry {
         float sx=out.x(),sy=out.y(),sp=out.p();
         int count=Math.max(1,Math.min(128,(int)Math.ceil((Math.hypot(cx-sx,cy-sy)+Math.hypot(ex-cx,ey-cy))/step)));
         for(int j=1;j<=count;j++){
-            float t=(float)j/count,u=1-t;
-            float x=u*u*sx+2*u*t*cx+t*t*ex,y=u*u*sy+2*u*t*cy+t*t*ey;
-            if(Math.hypot(x-out.x(),y-out.y())>.001)out.add(x,y,u*u*sp+2*u*t*cp+t*t*ep);
+            float t=(float)j/count;
+            float x=curve(sx,cx,ex,t),y=curve(sy,cy,ey,t);
+            if(Math.hypot(x-out.x(),y-out.y())>.001)out.add(x,y,curve(sp,cp,ep,t));
         }
+    }
+    private static float curve(float a,float b,float c,float t){
+        float left=a+(b-a)*t,right=b+(c-b)*t;return left+(right-left)*t;
     }
     private static final class Floats {
         float[] values;int size;
