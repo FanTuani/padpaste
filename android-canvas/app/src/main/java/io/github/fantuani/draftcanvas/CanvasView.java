@@ -65,15 +65,16 @@ public final class CanvasView extends View {
     private void drawGrid(android.graphics.Canvas c){
         double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
         double pixels=step*ink.view.scale;float x0=(float)((getWidth()/2.0-((ink.view.x%step)+step)%step*ink.view.scale)%pixels),y0=(float)((getHeight()/2.0-((ink.view.y%step)+step)%step*ink.view.scale)%pixels);
-        paint.setStyle(Paint.Style.FILL);paint.setColor(0xFFDDE2DE);
-        for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels)c.drawCircle(x,y,dp(.65f),paint);
+        paint.setStyle(Paint.Style.FILL);paint.setColor(0xFFB9C4BC);
+        for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels)c.drawCircle(x,y,dp(.8f),paint);
     }
     private float radius(Ink.Stroke s,int i){return s.width*(.5f+.5f*(float)Math.sqrt(Math.max(.05f,s.points[i+2])))/2;}
     private Path outline(Ink.Stroke s){
-        Path path=new Path();int n=s.points.length/3;if(n<2)return path;
-        for(int side=1;side>=-1;side-=2){for(int j=0;j<n;j++){int i=(side==1?j:n-1-j)*3,prev=Math.max(0,i-3),next=Math.min(s.points.length-3,i+3);
-            float dx=s.points[next]-s.points[prev],dy=s.points[next+1]-s.points[prev+1],len=(float)Math.hypot(dx,dy);if(len<.001f){dx=1;dy=0;len=1;}
-            float radius=radius(s,i),x=s.points[i]-side*dy/len*radius,y=s.points[i+1]+side*dx/len*radius;
+        float[] points=StrokeGeometry.smooth(s.points,s.width);
+        Path path=new Path();int n=points.length/3;if(n<2)return path;
+        for(int side=1;side>=-1;side-=2){for(int j=0;j<n;j++){int i=(side==1?j:n-1-j)*3,prev=Math.max(0,i-3),next=Math.min(points.length-3,i+3);
+            float dx=points[next]-points[prev],dy=points[next+1]-points[prev+1],len=(float)Math.hypot(dx,dy);if(len<.001f){dx=1;dy=0;len=1;}
+            float radius=s.width*(.5f+.5f*(float)Math.sqrt(Math.max(.05f,points[i+2])))/2,x=points[i]-side*dy/len*radius,y=points[i+1]+side*dx/len*radius;
             if(side==1&&j==0)path.moveTo(x,y);else path.lineTo(x,y);
         }}path.close();return path;
     }
