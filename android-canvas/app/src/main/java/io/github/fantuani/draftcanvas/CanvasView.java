@@ -9,10 +9,13 @@ import java.util.*;
 public final class CanvasView extends View {
     public static final int PEN=0,SELECT=1,ERASE=2;
     public final Ink ink;
-    public int mode=PEN,color=0xFF243137;public float width,eraserSize;
+    public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final WeakHashMap<Ink.Stroke,Path> paths=new WeakHashMap<>();
+    private static final class RenderState {
+        final Path path;final Ink.Cut cut;final float[] points;final boolean filled;
+        RenderState(Path path,Ink.Stroke stroke){this.path=path;cut=stroke.cuts;points=stroke.points;filled=cut!=null;}
+    }
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
     private long lastPen;
     private boolean temporaryEraser;
@@ -84,12 +87,17 @@ public final class CanvasView extends View {
         for(int i=3;i<points.length;i+=3)path.lineTo(points[i],points[i+1]);
         return path;
     }
-    private Path cutOutline(Ink.Stroke s,Path center){
+    private Path cutOutline(Ink.Stroke s,Path center,RenderState previous){
         Path outline=new Path();
+        if(previous!=null&&previous.filled&&previous.points==s.points)outline.set(previous.path);
+        else {
         if(s.pathPoints().length==3)outline.addCircle(s.points[0],s.points[1],s.width/2,Path.Direction.CW);
         else paint.getFillPath(center,outline);
+            if(previous!=null&&previous.filled)outline.op(previous.path,Path.Op.INTERSECT);
+        }
         Path mask=new Path();
-        for(Ink.Cut cut=s.cuts;cut!=null;cut=cut.previous){
+        for(Ink.Cut cut=s.cuts;cut!=null&&(previous==null||cut!=previous.cut);cut=cut.previous){
+            if(Math.max(cut.ax,cut.bx)+cut.radius<s.left-s.x||Math.min(cut.ax,cut.bx)-cut.radius>s.right-s.x||Math.max(cut.ay,cut.by)+cut.radius<s.top-s.y||Math.min(cut.ay,cut.by)-cut.radius>s.bottom-s.y)continue;
             float ax=(float)cut.ax,ay=(float)cut.ay,bx=(float)cut.bx,by=(float)cut.by,r=(float)cut.radius;
             mask.addCircle(ax,ay,r,Path.Direction.CW);mask.addCircle(bx,by,r,Path.Direction.CW);
             double length=Math.hypot(bx-ax,by-ay);
@@ -102,7 +110,11 @@ public final class CanvasView extends View {
         c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
         paint.setColor(s.color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(s.width);
         paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
-        Path path=paths.get(s);if(path==null){path=centerline(s);if(s.cuts!=null)path=cutOutline(s,path);if(s.id!=0)paths.put(s,path);}
+        RenderState state=s.renderState instanceof RenderState?(RenderState)s.renderState:null;
+        if(state==null){RenderState previous=s.previousRender instanceof RenderState?(RenderState)s.previousRender:null;
+            Path path=centerline(s);if(s.cuts!=null)path=cutOutline(s,path,previous);state=new RenderState(path,s);
+            if(s.id!=0){s.renderState=state;s.previousRender=null;}}
+        Path path=state.path;
         if(s.cuts!=null)paint.setStyle(Paint.Style.FILL);c.drawPath(path,paint);
         if(s.cuts==null&&s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
         c.restore();
@@ -129,7 +141,7 @@ public final class CanvasView extends View {
         else {for(int h=0;h<e.getHistorySize();h++)append(e.getHistoricalX(i,h),e.getHistoricalY(i,h),e.getHistoricalPressure(i,h));append(e.getX(i),e.getY(i),e.getPressure(i));}
     }
     private void erase(double x,double y,float pressure){
-        cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(pressure));double radius=cursorRadius/ink.view.scale;
+        cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(pressure,eraserSensitivity));double radius=cursorRadius/ink.view.scale;
         ink.erase(erasePoint?eraseX:x,erasePoint?eraseY:y,x,y,erasePoint?Math.max(radius,eraseRadius):radius);
         erasePoint=true;eraseX=x;eraseY=y;eraseRadius=radius;
     }

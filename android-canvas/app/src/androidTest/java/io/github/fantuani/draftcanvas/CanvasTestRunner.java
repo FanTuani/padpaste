@@ -40,6 +40,10 @@ public final class CanvasTestRunner extends Instrumentation {
             check(bitmap.getPixel(600,807)!=inkColor,"circle failed to subtract thick ink edge");
             check(bitmap.getPixel(600,795)==inkColor,"circle removed ink outside its boundary");
             check(bitmap.getPixel(550,800)==inkColor,"local eraser removed the rest of the stroke");
+            d.begin();d.erase(700,807,700,807,5);d.commit();v.draw(new android.graphics.Canvas(bitmap));
+            check(bitmap.getPixel(600,807)!=inkColor&&bitmap.getPixel(700,807)!=inkColor,"incremental render lost a previous or current cut");
+            check(bitmap.getPixel(700,795)==inkColor,"incremental render removed ink outside the circle");
+            d.undo();v.draw(new android.graphics.Canvas(bitmap));check(bitmap.getPixel(600,807)!=inkColor&&bitmap.getPixel(700,807)==inkColor,"undo did not preserve earlier cut");
             d.undo();v.draw(new android.graphics.Canvas(bitmap));check(bitmap.getPixel(600,807)==inkColor,"undo did not restore erased ink");bitmap.recycle();
             d.strokes.clear();v.tool(CanvasView.PEN);pressure=.1f;time+=1000;
             pen(v,MotionEvent.ACTION_DOWN,500,1000);pressure=1;pen(v,MotionEvent.ACTION_MOVE,650,1000);pen(v,MotionEvent.ACTION_UP,800,1000);

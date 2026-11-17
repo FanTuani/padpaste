@@ -13,6 +13,7 @@ public final class Ink {
         public final double x,y;public final float[] points; // local x,y,pressure triplets
         public final double left,top,right,bottom;
         private final boolean flattened;private float[] geometry;final Cut cuts;
+        Object renderState,previousRender;
         public Stroke(long id,int color,float width,double x,double y,float[] points){
             this(id,color,width,x,y,points,false);
         }
@@ -26,7 +27,7 @@ public final class Ink {
             left=x+l-width;right=x+r+width;top=y+t-width;bottom=y+b+width;
         }
         public float[] pathPoints(){if(flattened)return points;if(geometry==null)geometry=StrokeGeometry.smooth(points,width);return geometry;}
-        public Stroke offset(long id,double dx,double dy){return new Stroke(id,color,width,x+dx,y+dy,points,flattened,cuts);}
+        public Stroke offset(long id,double dx,double dy){Stroke copy=new Stroke(id,color,width,x+dx,y+dy,points,flattened,cuts);copy.renderState=renderState;copy.previousRender=previousRender;return copy;}
         public boolean intersects(double l,double t,double r,double b){return right>=l&&left<=r&&bottom>=t&&top<=b;}
         public boolean crossesRect(double l,double t,double r,double b){
             float[] points=pathPoints();
@@ -83,16 +84,24 @@ public final class Ink {
         for(Stroke s:strokes){
             if(!s.intersects(Math.min(ax,bx)-radius,Math.min(ay,by)-radius,Math.max(ax,bx)+radius,Math.max(ay,by)+radius)){next.add(s);continue;}
             double lax=ax-s.x,lay=ay-s.y,lbx=bx-s.x,lby=by-s.y;
-            if(Eraser.cut(s.pathPoints(),lax,lay,lbx,lby,radius+s.width/2)==null){next.add(s);continue;}
+            if(covered(s.cuts,lax,lay,lbx,lby,radius)||!Eraser.intersects(s.pathPoints(),lax,lay,lbx,lby,radius+s.width/2)){next.add(s);continue;}
             Cut cut=new Cut(s.cuts,lax,lay,lbx,lby,radius);
             // Remove only fully covered centerline sections. Exact vector masks also cut
             // partially covered edges of thick ink without deleting ink outside the circle.
             List<float[]> pieces=radius>s.width/2?Eraser.cut(s.pathPoints(),lax,lay,lbx,lby,radius-s.width/2):null;
             changed=true;selected.remove(s.id);
-            if(pieces==null)next.add(new Stroke(nextId(),s.color,s.width,s.x,s.y,s.points,s.flattened,cut));
-            else for(float[] p:pieces)next.add(new Stroke(nextId(),s.color,s.width,s.x,s.y,p,true,cut));
+            if(pieces==null)next.add(erasedStroke(s,s.points,s.flattened,cut));
+            else for(float[] p:pieces)next.add(erasedStroke(s,p,true,cut));
         }
         if(changed){strokes.clear();strokes.addAll(next);}
+    }
+    private Stroke erasedStroke(Stroke original,float[] points,boolean flattened,Cut cut){
+        Stroke result=new Stroke(nextId(),original.color,original.width,original.x,original.y,points,flattened,cut);
+        result.previousRender=original.renderState!=null?original.renderState:original.previousRender;return result;
+    }
+    private boolean covered(Cut cut,double ax,double ay,double bx,double by,double radius){
+        for(int i=0;cut!=null&&i<8;i++,cut=cut.previous)if(radius<=cut.radius&&Eraser.distance(ax,ay,cut.ax,cut.ay,cut.bx,cut.by)+radius<=cut.radius&&Eraser.distance(bx,by,cut.ax,cut.ay,cut.bx,cut.by)+radius<=cut.radius)return true;
+        return false;
     }
     public void clear(){if(strokes.isEmpty())return;begin();strokes.clear();selected.clear();commit();}
 }
