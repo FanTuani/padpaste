@@ -22,7 +22,7 @@ jobs:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
-      - run: cd android-canvas && ./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest --no-daemon
+      - run: cd android-canvas && ./gradlew testStandardDebugUnitTest testXiaomiDebugUnitTest lintStandardDebug lintXiaomiDebug assembleStandardDebug assembleStandardDebugAndroidTest assembleXiaomiDebug assembleXiaomiDebugAndroidTest --no-daemon
       - name: Signed release
         if: github.event_name != 'pull_request'
         env:
@@ -32,7 +32,7 @@ jobs:
         run: |
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/padpaste.p12"
           export PADPASTE_KEYSTORE="$RUNNER_TEMP/padpaste.p12"
-          cd android-canvas && ./gradlew assembleRelease --no-daemon
+          cd android-canvas && ./gradlew assembleStandardRelease assembleXiaomiRelease --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: draftcanvas-apks

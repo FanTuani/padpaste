@@ -13,8 +13,10 @@
 
 ```sh
 cd android-canvas
-./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+./gradlew testStandardDebugUnitTest lintStandardDebug assembleStandardDebug assembleStandardDebugAndroidTest
 ```
+
+小米兼容构建使用系统硬编码的绘图免拦截包名 `com.miui.pen.demo`（界面名称为「草稿·小米笔」），使下键长按不会打开系统笔记。它仍是本项目自行签名的普通应用，不授予小米系统权限，不修改原笔记，不改变全局游戏模式。普通构建保持 `io.github.fantuani.draftcanvas`。该兼容行为依赖当前 HyperOS 固件，更新系统后需复测。
 
 Android 8+，JDK 17、SDK 35。首次连接真机时安装 debug APK 和 androidTest APK，运行：
 

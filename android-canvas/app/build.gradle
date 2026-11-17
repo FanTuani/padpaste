@@ -10,6 +10,18 @@ android {
         versionName '0.1.1'
         testInstrumentationRunner 'io.github.fantuani.draftcanvas.CanvasTestRunner'
     }
+    flavorDimensions 'device'
+    productFlavors {
+        standard { dimension 'device'; manifestPlaceholders = [appLabel: '草稿'] }
+        xiaomi {
+            dimension 'device'
+            // HyperOS hardcodes this uninstalled demo package in its stylus shortcut exemption list.
+            // No Xiaomi signing identity, privileged permissions, or system packages are modified.
+            applicationId 'com.miui.pen.demo'
+            versionNameSuffix '-xiaomi'
+            manifestPlaceholders = [appLabel: '草稿·小米笔']
+        }
+    }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     signingConfigs {
         release {
