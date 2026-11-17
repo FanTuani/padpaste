@@ -79,7 +79,7 @@ public final class MainActivity extends Activity {
             float y=getHeight()/2f;p.setColor(canvas.color);p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeWidth(canvas.width);c.drawLine(getWidth()*.08f,y,getWidth()*.45f,y,p);
             p.setStyle(Paint.Style.FILL);p.setColor(0x10167B70);c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);p.setStyle(Paint.Style.STROKE);p.setColor(TEAL);p.setStrokeWidth(dp(1));c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);
         }};
-        panel.addView(preview,new LinearLayout.LayoutParams(-1,dp(88)));
+        panel.addView(preview,new LinearLayout.LayoutParams(-1,dp(110)));
         panel.addView(sizeControl("笔粗细",.3f,10,.1f,canvas.width/density,value->{canvas.width=value*density;preview.invalidate();}));
         panel.addView(sizeControl("橡皮大小",6,96,1,canvas.eraserSize/density,value->{canvas.setEraserSize(value*density);preview.invalidate();}));
         panel.addView(sizeControl("橡皮压感灵敏度",.5f,4,.1f,canvas.eraserSensitivity,value->{canvas.eraserSensitivity=value;}));
