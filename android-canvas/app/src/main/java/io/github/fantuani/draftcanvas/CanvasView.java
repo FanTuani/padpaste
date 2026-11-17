@@ -84,13 +84,27 @@ public final class CanvasView extends View {
         for(int i=3;i<points.length;i+=3)path.lineTo(points[i],points[i+1]);
         return path;
     }
+    private Path cutOutline(Ink.Stroke s,Path center){
+        Path outline=new Path();
+        if(s.pathPoints().length==3)outline.addCircle(s.points[0],s.points[1],s.width/2,Path.Direction.CW);
+        else paint.getFillPath(center,outline);
+        Path mask=new Path();
+        for(Ink.Cut cut=s.cuts;cut!=null;cut=cut.previous){
+            float ax=(float)cut.ax,ay=(float)cut.ay,bx=(float)cut.bx,by=(float)cut.by,r=(float)cut.radius;
+            mask.addCircle(ax,ay,r,Path.Direction.CW);mask.addCircle(bx,by,r,Path.Direction.CW);
+            double length=Math.hypot(bx-ax,by-ay);
+            if(length>1e-6){float nx=(float)(-(by-ay)/length*r),ny=(float)((bx-ax)/length*r);
+                mask.moveTo(ax-nx,ay-ny);mask.lineTo(bx-nx,by-ny);mask.lineTo(bx+nx,by+ny);mask.lineTo(ax+nx,ay+ny);mask.close();}
+        }
+        outline.op(mask,Path.Op.DIFFERENCE);return outline;
+    }
     private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy){
         c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
         paint.setColor(s.color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(s.width);
         paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
-        Path path=paths.get(s);if(path==null){path=centerline(s);if(s.id!=0)paths.put(s,path);}c.drawPath(path,paint);
-        // Android does not draw a zero-length Path as a round dot consistently.
-        if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
+        Path path=paths.get(s);if(path==null){path=centerline(s);if(s.cuts!=null)path=cutOutline(s,path);if(s.id!=0)paths.put(s,path);}
+        if(s.cuts!=null)paint.setStyle(Paint.Style.FILL);c.drawPath(path,paint);
+        if(s.cuts==null&&s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
         c.restore();
     }
     private Ink.Stroke activeStroke(){float[] p=new float[samples.size()];for(int i=0;i<p.length;i++)p[i]=samples.get(i);return new Ink.Stroke(0,strokeColor,strokeWidth,strokeX,strokeY,p);}

@@ -4,22 +4,29 @@ import java.util.*;
 
 /** Session-only immutable vector strokes. History shares point arrays, never pixel bitmaps. */
 public final class Ink {
+    static final class Cut {
+        final Cut previous;final double ax,ay,bx,by,radius;
+        Cut(Cut previous,double ax,double ay,double bx,double by,double radius){this.previous=previous;this.ax=ax;this.ay=ay;this.bx=bx;this.by=by;this.radius=radius;}
+    }
     public static final class Stroke {
         public final long id;public final int color;public final float width;
         public final double x,y;public final float[] points; // local x,y,pressure triplets
         public final double left,top,right,bottom;
-        private final boolean flattened;private float[] geometry;
+        private final boolean flattened;private float[] geometry;final Cut cuts;
         public Stroke(long id,int color,float width,double x,double y,float[] points){
             this(id,color,width,x,y,points,false);
         }
         Stroke(long id,int color,float width,double x,double y,float[] points,boolean flattened){
-            this.flattened=flattened;this.id=id;this.color=color;this.width=width;this.x=x;this.y=y;this.points=points;
+            this(id,color,width,x,y,points,flattened,null);
+        }
+        Stroke(long id,int color,float width,double x,double y,float[] points,boolean flattened,Cut cuts){
+            this.cuts=cuts;this.flattened=flattened;this.id=id;this.color=color;this.width=width;this.x=x;this.y=y;this.points=points;
             double l=points[0],t=points[1],r=l,b=t;
             for(int i=0;i<points.length;i+=3){l=Math.min(l,points[i]);r=Math.max(r,points[i]);t=Math.min(t,points[i+1]);b=Math.max(b,points[i+1]);}
             left=x+l-width;right=x+r+width;top=y+t-width;bottom=y+b+width;
         }
         public float[] pathPoints(){if(flattened)return points;if(geometry==null)geometry=StrokeGeometry.smooth(points,width);return geometry;}
-        public Stroke offset(long id,double dx,double dy){return new Stroke(id,color,width,x+dx,y+dy,points,flattened);}
+        public Stroke offset(long id,double dx,double dy){return new Stroke(id,color,width,x+dx,y+dy,points,flattened,cuts);}
         public boolean intersects(double l,double t,double r,double b){return right>=l&&left<=r&&bottom>=t&&top<=b;}
         public boolean crossesRect(double l,double t,double r,double b){
             float[] points=pathPoints();
@@ -75,9 +82,15 @@ public final class Ink {
         List<Stroke> next=new ArrayList<>();boolean changed=false;
         for(Stroke s:strokes){
             if(!s.intersects(Math.min(ax,bx)-radius,Math.min(ay,by)-radius,Math.max(ax,bx)+radius,Math.max(ay,by)+radius)){next.add(s);continue;}
-            List<float[]> pieces=Eraser.cut(s.pathPoints(),ax-s.x,ay-s.y,bx-s.x,by-s.y,radius+s.width/2);
-            if(pieces==null){next.add(s);continue;}changed=true;selected.remove(s.id);
-            for(float[] p:pieces)next.add(new Stroke(nextId(),s.color,s.width,s.x,s.y,p,true));
+            double lax=ax-s.x,lay=ay-s.y,lbx=bx-s.x,lby=by-s.y;
+            if(Eraser.cut(s.pathPoints(),lax,lay,lbx,lby,radius+s.width/2)==null){next.add(s);continue;}
+            Cut cut=new Cut(s.cuts,lax,lay,lbx,lby,radius);
+            // Remove only fully covered centerline sections. Exact vector masks also cut
+            // partially covered edges of thick ink without deleting ink outside the circle.
+            List<float[]> pieces=radius>s.width/2?Eraser.cut(s.pathPoints(),lax,lay,lbx,lby,radius-s.width/2):null;
+            changed=true;selected.remove(s.id);
+            if(pieces==null)next.add(new Stroke(nextId(),s.color,s.width,s.x,s.y,s.points,s.flattened,cut));
+            else for(float[] p:pieces)next.add(new Stroke(nextId(),s.color,s.width,s.x,s.y,p,true,cut));
         }
         if(changed){strokes.clear();strokes.addAll(next);}
     }
