@@ -16,6 +16,31 @@ public final class CanvasTestRunner extends Instrumentation {
         MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
+
+    private void checkPinchSnap(CanvasView view, double startScale, int snapRadius, int holdRadius, int releaseRadius) {
+        Viewport viewport = view.ink.view;
+        viewport.scale = startScale;
+        int finger = MotionEvent.TOOL_TYPE_FINGER;
+        int secondPointer = 1 << MotionEvent.ACTION_POINTER_INDEX_SHIFT;
+        double anchorX = viewport.worldX(400, view.getWidth());
+        double anchorY = viewport.worldY(300, view.getHeight());
+        event(view, finger, MotionEvent.ACTION_DOWN, 300, 300);
+        event(view, finger, MotionEvent.ACTION_POINTER_DOWN | secondPointer, 300, 300, 500, 300);
+        event(view, finger, MotionEvent.ACTION_MOVE, 410 - snapRadius, 320, 410 + snapRadius, 320);
+        check(viewport.scale == 1, "pinch must snap to exactly 100%");
+        check(Math.abs(viewport.worldX(410, view.getWidth()) - anchorX) < .001
+                && Math.abs(viewport.worldY(320, view.getHeight()) - anchorY) < .001,
+                "snap must preserve the canvas point under the moving pinch center");
+        event(view, finger, MotionEvent.ACTION_MOVE, 410 - holdRadius, 320, 410 + holdRadius, 320);
+        check(viewport.scale == 1, "small finger movement must keep the pinch snapped");
+        event(view, finger, MotionEvent.ACTION_MOVE, 410 - releaseRadius, 320, 410 + releaseRadius, 320);
+        check(Math.abs(viewport.scale - startScale * releaseRadius / 100) < .001,
+                "continued pinch must release the snap at the requested scale");
+        event(view, finger, MotionEvent.ACTION_POINTER_UP | secondPointer,
+                410 - releaseRadius, 320, 410 + releaseRadius, 320);
+        event(view, finger, MotionEvent.ACTION_UP, 410 - releaseRadius, 320);
+    }
+
     @android.annotation.TargetApi(29)
     private android.graphics.Bitmap snapshot(CanvasView v){
         try(GpuTarget target=new GpuTarget(v.getWidth(),v.getHeight())){
@@ -40,6 +65,8 @@ public final class CanvasTestRunner extends Instrumentation {
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,250,300,550,300);
             check(Math.abs(d.view.scale-1.5)<.01,"two finger zoom failed");
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_POINTER_UP|(1<<8),250,300,550,300);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,250,300);
+            checkPinchSnap(v, .92, 108, 112, 122);
+            checkPinchSnap(v, 1.10, 94, 90, 82);
             d.strokes.clear();d.view.x=v.getWidth()/2.0;d.view.y=v.getHeight()/2.0;d.view.scale=1;
             int inkColor=0xff243137;d.add(new Ink.Stroke(d.nextId(),inkColor,20,500,800,new float[]{0,0,1,300,0,1}));
             d.begin();d.erase(600,807,600,807,5);d.commit();
@@ -104,6 +131,6 @@ public final class CanvasTestRunner extends Instrumentation {
                     "overview must center existing ink");
             v.refresh();
         });
-        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, side-button selection release\n");finish(Activity.RESULT_OK,result);
+        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, side-button selection release\n");finish(Activity.RESULT_OK,result);
     }catch(Throwable e){result.putString("stream","FAIL: "+e);finish(Activity.RESULT_CANCELED,result);}}
 }

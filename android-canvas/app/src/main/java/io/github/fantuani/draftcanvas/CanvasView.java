@@ -45,6 +45,7 @@ public final class CanvasView extends View {
     private int strokeColor;private float strokeWidth;
     private boolean fingers;private int fingerCount;private float prevX,prevY,prevDistance;
     private double gestureX,gestureY,gestureScale;
+    private final Viewport.Pinch pinch = new Viewport.Pinch();
     public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);eraserSize=dp(24);setBackgroundColor(0xFFFAFAF7);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
     private float dp(float n){return n*getResources().getDisplayMetrics().density;}
     private double wx(float x){return ink.view.worldX(x,getWidth());}private double wy(float y){return ink.view.worldY(y,getHeight());}
@@ -343,8 +344,33 @@ public final class CanvasView extends View {
         int count=0;float cx=0,cy=0,distance=0,firstX=0,firstY=0;
         for(int i=0;i<e.getPointerCount();i++){if(action==MotionEvent.ACTION_POINTER_UP&&i==index)continue;if(e.getToolType(i)!=MotionEvent.TOOL_TYPE_FINGER)continue;if(count==0){firstX=e.getX(i);firstY=e.getY(i);}else if(count==1)distance=(float)Math.hypot(e.getX(i)-firstX,e.getY(i)-firstY);cx+=e.getX(i);cy+=e.getY(i);count++;if(count==2)break;}
         if(count==0||((nearPen||e.getEventTime()-lastPen<250)&&count==1)){fingers=false;return true;}cx/=count;cy/=count;
-        if(!fingers||count!=fingerCount){if(!fingers){gestureX=ink.view.x;gestureY=ink.view.y;gestureScale=ink.view.scale;}fingers=true;fingerCount=count;prevX=cx;prevY=cy;prevDistance=distance;return true;}
-        if(action==MotionEvent.ACTION_MOVE && !fingerTap){double anchorX=wx(prevX),anchorY=wy(prevY);if(count==2&&prevDistance>1)ink.view.zoom(distance/prevDistance,prevX,prevY,getWidth(),getHeight());ink.view.x=anchorX-(cx-getWidth()/2.0)/ink.view.scale;ink.view.y=anchorY-(cy-getHeight()/2.0)/ink.view.scale;prevX=cx;prevY=cy;prevDistance=distance;refresh();}return true;
+        if (!fingers || count != fingerCount) {
+            if (!fingers) {
+                gestureX = ink.view.x;
+                gestureY = ink.view.y;
+                gestureScale = ink.view.scale;
+            }
+            if (count == 2) pinch.start(ink.view.scale);
+            fingers = true;
+            fingerCount = count;
+            prevX = cx;
+            prevY = cy;
+            prevDistance = distance;
+            return true;
+        }
+        if (action == MotionEvent.ACTION_MOVE && !fingerTap) {
+            double anchorX = wx(prevX), anchorY = wy(prevY);
+            if (count == 2 && prevDistance > 1 && distance > 1) {
+                ink.view.scale = pinch.update((double) distance / prevDistance);
+            }
+            ink.view.x = anchorX - (cx - getWidth() / 2.0) / ink.view.scale;
+            ink.view.y = anchorY - (cy - getHeight() / 2.0) / ink.view.scale;
+            prevX = cx;
+            prevY = cy;
+            prevDistance = distance;
+            refresh();
+        }
+        return true;
     }
     @Override public boolean performClick(){super.performClick();return true;}
 

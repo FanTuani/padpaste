@@ -8,7 +8,31 @@ public final class Viewport {
     public void pan(double dx,double dy){x-=dx/scale;y-=dy/scale;}
     public void zoom(double factor,double focusX,double focusY,double width,double height){
         double wx=worldX(focusX,width),wy=worldY(focusY,height);
-        scale=Math.max(.0001,Math.min(10000,scale*factor));
+        scale=clampScale(scale*factor);
         x=wx-(focusX-width/2)/scale;y=wy-(focusY-height/2)/scale;
+    }
+
+    private static double clampScale(double scale) {
+        return Math.max(.0001, Math.min(10000, scale));
+    }
+
+    static final class Pinch {
+        private static final double SNAP_RANGE = .04;
+        private static final double RELEASE_RANGE = .08;
+        private double freeScale;
+        private boolean snapped;
+
+        void start(double scale) {
+            freeScale = scale;
+            snapped = scale == 1;
+        }
+
+        double update(double factor) {
+            // Keep accumulating finger movement while the displayed scale is held at 100%.
+            freeScale = clampScale(freeScale * factor);
+            double range = snapped ? RELEASE_RANGE : SNAP_RANGE;
+            snapped = freeScale >= 1 - range && freeScale <= 1 + range;
+            return snapped ? 1 : freeScale;
+        }
     }
 }
