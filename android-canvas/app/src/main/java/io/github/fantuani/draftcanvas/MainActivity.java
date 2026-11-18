@@ -75,9 +75,6 @@ public final class MainActivity extends Activity {
             @Override public void command(int id) { menuCommand(id); }
         });
         root.addView(menu, new FrameLayout.LayoutParams(-1, -1));
-        SnapGlow snapGlow = new SnapGlow(this);
-        root.addView(snapGlow, new FrameLayout.LayoutParams(-1, -1));
-        canvas.pinchSnapped = snapGlow::flash;
         canvas.marqueeFinished = () -> {
             if (tapSelection) finishSelection(false);
         };

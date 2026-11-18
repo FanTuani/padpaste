@@ -3,15 +3,11 @@ package io.github.fantuani.draftcanvas;
 import android.app.*;
 import android.os.*;
 import android.content.Intent;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Color;
 import android.view.*;
 
 /** Exercises real View dispatch with distinct synthetic pen and finger devices. */
 public final class CanvasTestRunner extends Instrumentation {
     private long time;private float pressure=.65f;private boolean perf;private Bundle options;
-    private int snapFlashes;
     @Override public void onCreate(Bundle args){super.onCreate(args);options=args;perf=args!=null&&"true".equals(args.getString("perf"));start();}
     private void check(boolean value,String message){if(!value)throw new AssertionError(message);}
     private void event(CanvasView view,int tool,int action,float... xy){
@@ -47,7 +43,6 @@ public final class CanvasTestRunner extends Instrumentation {
 
     private void checkPinchSnap(CanvasView view, double startScale, int snapRadius, int holdRadius,
                                 int releaseRadius, boolean gradual) {
-        int flashesBefore = snapFlashes;
         beginPinch(view, startScale);
         Viewport viewport = view.ink.view;
         double anchorX = viewport.worldX(400, view.getWidth());
@@ -55,7 +50,6 @@ public final class CanvasTestRunner extends Instrumentation {
         if (gradual) movePinchSlowly(view, 100, snapRadius);
         else movePinch(view, snapRadius);
         check(viewport.scale == 1, "pinch must snap to exactly 100%");
-        check(snapFlashes == flashesBefore + 1, "entering snap must flash immediately");
         check(Math.abs(viewport.worldX(410, view.getWidth()) - anchorX) < .001
                 && Math.abs(viewport.worldY(320, view.getHeight()) - anchorY) < .001,
                 "snap must preserve the canvas point under the moving pinch center");
@@ -66,25 +60,6 @@ public final class CanvasTestRunner extends Instrumentation {
         check(Math.abs(viewport.scale - startScale * releaseRadius / 100) < .001,
                 "continued pinch must release the snap at the requested scale");
         endPinch(view, releaseRadius);
-        check(snapFlashes == flashesBefore + 1, "holding and releasing a snap must not repeat the flash");
-    }
-
-    private void checkSnapGlow() {
-        SnapGlow glow = new SnapGlow(getTargetContext());
-        int size = 400;
-        glow.layout(0, 0, size, size);
-        Bitmap image = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        try {
-            glow.flash();
-            glow.draw(new Canvas(image));
-            int edge = image.getPixel(size / 2, 1);
-            check(Color.alpha(edge) > 0 && Color.green(edge) > Color.red(edge)
-                    && Color.green(edge) > Color.blue(edge), "snap glow must color the screen edge green");
-            check(Color.alpha(image.getPixel(size / 2, size / 2)) == 0,
-                    "snap glow must leave the center clear");
-        } finally {
-            image.recycle();
-        }
     }
 
     @android.annotation.TargetApi(29)
@@ -99,7 +74,6 @@ public final class CanvasTestRunner extends Instrumentation {
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
             root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);
             Ink d=v.ink;time=SystemClock.uptimeMillis();
-            v.pinchSnapped = () -> snapFlashes++;
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");
             time+=1000;double x=d.view.x;event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_DOWN,400,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,450,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,450,700);check(d.strokes.size()==1&&d.view.x<x,"finger must pan without ink");
@@ -120,8 +94,6 @@ public final class CanvasTestRunner extends Instrumentation {
             movePinchSlowly(v, 100, 102);
             check(Math.abs(d.view.scale - 1.02) < .001, "a new pinch at 100% must be free to zoom away");
             endPinch(v, 102);
-            check(snapFlashes == 4, "zooming away from 100% must not flash");
-            checkSnapGlow();
             d.strokes.clear();d.view.x=v.getWidth()/2.0;d.view.y=v.getHeight()/2.0;d.view.scale=1;
             int inkColor=0xff243137;d.add(new Ink.Stroke(d.nextId(),inkColor,20,500,800,new float[]{0,0,1,300,0,1}));
             d.begin();d.erase(600,807,600,807,5);d.commit();

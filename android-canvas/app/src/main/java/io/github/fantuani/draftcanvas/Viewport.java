@@ -27,10 +27,6 @@ public final class Viewport {
             snapped = false;
         }
 
-        boolean isSnapped() {
-            return snapped;
-        }
-
         double update(double factor) {
             // Keep accumulating finger movement while the displayed scale is held at 100%.
             double previousScale = freeScale;

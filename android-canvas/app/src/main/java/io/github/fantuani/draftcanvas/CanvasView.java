@@ -11,7 +11,6 @@ public final class CanvasView extends View {
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
-    Runnable pinchSnapped = () -> {};
     Runnable marqueeFinished = () -> {};
     private boolean fingerTap;
     private float fingerDownX, fingerDownY;
@@ -362,9 +361,7 @@ public final class CanvasView extends View {
         if (action == MotionEvent.ACTION_MOVE && !fingerTap) {
             double anchorX = wx(prevX), anchorY = wy(prevY);
             if (count == 2 && prevDistance > 1 && distance > 1) {
-                boolean wasSnapped = pinch.isSnapped();
                 ink.view.scale = pinch.update((double) distance / prevDistance);
-                if (!wasSnapped && pinch.isSnapped()) pinchSnapped.run();
             }
             ink.view.x = anchorX - (cx - getWidth() / 2.0) / ink.view.scale;
             ink.view.y = anchorY - (cy - getHeight() / 2.0) / ink.view.scale;
