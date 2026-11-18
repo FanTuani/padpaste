@@ -17,9 +17,9 @@ import android.view.ViewGroup;
 import android.view.animation.PathInterpolator;
 
 final class FanMenu extends ViewGroup {
-    static final int SIZE = 1, CLEAR = 2, COPY = 3, PASTE = 4, DELETE = 5, CANCEL = 6, SELECT = 7;
+    static final int SIZE = 1, CLEAR = 2, COPY = 3, PASTE = 4, DELETE = 5, CANCEL = 6, SELECT = 7, OVERVIEW = 8;
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70, RED = 0xFFAA5148;
-    private static final float[] TOOLS = {-178, -148, -118, -88, 9, 44, 0};
+    private static final float[] TOOLS = {-178, -149, -120, -91, 151, 114, 66, 29};
     private static final float[] SELECTION = {-165, -126, -87, -48};
     private static final PathInterpolator OPEN = new PathInterpolator(.18f, .76f, .22f, 1f);
     private static final PathInterpolator CLOSE = new PathInterpolator(.36f, 0f, .72f, .54f);
@@ -34,7 +34,7 @@ final class FanMenu extends ViewGroup {
     private final RectF arc = new RectF();
     private ValueAnimator animation;
     private boolean selection, shown, closing;
-    private float requestedX, requestedY, centerX, centerY, directionX, directionY;
+    private float requestedX, requestedY, centerX, centerY;
     private float progress, radius, unit;
 
     FanMenu(Context context, Actions actions) {
@@ -46,6 +46,9 @@ final class FanMenu extends ViewGroup {
     }
 
     boolean isOpen() { return shown && !closing; }
+    boolean hasToolsAt(float x, float y) {
+        return isOpen() && !selection && requestedX == x && requestedY == y;
+    }
 
     void showTools(float x, float y, int activeColor, boolean hasInk) {
         prepare(x, y, false);
@@ -53,9 +56,10 @@ final class FanMenu extends ViewGroup {
         swatch("朱红", 0xFFCF4941, activeColor);
         swatch("靛蓝", 0xFF3169CA, activeColor);
         swatch("青绿", TEAL, activeColor);
+        command("框选", SELECT, true);
         command("粗细", SIZE, true);
         command("清空", CLEAR, hasInk);
-        command("框选", SELECT, true);
+        command("总览", OVERVIEW, true);
         open();
     }
 
@@ -144,23 +148,30 @@ final class FanMenu extends ViewGroup {
 
     @Override protected void onMeasure(int w, int h) {
         setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(h));
-        unit = Math.min(dp(1), Math.min(getMeasuredWidth(), getMeasuredHeight()) / 290f);
-        int target = MeasureSpec.makeMeasureSpec(Math.round(50 * unit), MeasureSpec.EXACTLY);
+        unit = Math.min(dp(1), Math.min(getMeasuredWidth(), getMeasuredHeight()) / 235f);
+        int target = MeasureSpec.makeMeasureSpec(Math.round(43 * unit), MeasureSpec.EXACTLY);
         for (int i = 0; i < getChildCount(); i++) getChildAt(i).measure(target, target);
     }
 
     @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
-        radius = 105f * unit;
-        float reach = 144f * unit;
-        centerX = Math.max(8 * unit, Math.min(getWidth() - 8 * unit, requestedX));
-        centerY = Math.max(8 * unit, Math.min(getHeight() - 8 * unit, requestedY));
-        directionX = centerX < reach ? -1 : 1;
-        directionY = centerY < reach ? -1 : 1;
-        float xInset = 137 * unit;
-        centerX = Math.max(xInset, Math.min(getWidth() - xInset, centerX));
-        float above = (directionY > 0 ? 137 : selection ? 28 : 108) * unit;
-        float below = (directionY < 0 ? 137 : selection ? 28 : 108) * unit;
-        centerY = Math.max(above, Math.min(getHeight() - below, centerY));
+        radius = (selection ? 77f : 86f) * unit;
+        float[] angles = selection ? SELECTION : TOOLS;
+        float minX = 0, maxX = 0, minY = 0, maxY = 0;
+        for (float degrees : angles) {
+            // Include the short rotation during the entrance animation in the edge clamp.
+            for (float offset : new float[]{0, -10}) {
+                double angle = Math.toRadians(degrees + offset);
+                float x = radius * (float) Math.cos(angle);
+                float y = radius * (float) Math.sin(angle);
+                minX = Math.min(minX, x);
+                maxX = Math.max(maxX, x);
+                minY = Math.min(minY, y);
+                maxY = Math.max(maxY, y);
+            }
+        }
+        float padding = 26f * unit;
+        centerX = Math.max(padding - minX, Math.min(getWidth() - padding - maxX, requestedX));
+        centerY = Math.max(padding - minY, Math.min(getHeight() - padding - maxY, requestedY));
         for (int i = 0; i < getChildCount(); i++) {
             View child = getChildAt(i);
             child.layout(0, 0, child.getMeasuredWidth(), child.getMeasuredHeight());
@@ -173,13 +184,12 @@ final class FanMenu extends ViewGroup {
         float[] angles = selection ? SELECTION : TOOLS;
         for (int i = 0; i < getChildCount(); i++) {
             View child = getChildAt(i);
-            boolean hub = !selection && i == TOOLS.length - 1;
-            float stagger = hub ? 0f : i * .022f;
+            float stagger = i * .018f;
             float amount = Math.max(0f, Math.min(1f, (progress - stagger) / (1f - stagger)));
-            float distance = hub ? 0f : radius * (.62f + .38f * amount);
+            float distance = radius * (.62f + .38f * amount);
             double angle = Math.toRadians(angles[i] - (1f - amount) * 10f);
-            child.setTranslationX(centerX + directionX * distance * (float) Math.cos(angle) - child.getWidth() / 2f);
-            child.setTranslationY(centerY + directionY * distance * (float) Math.sin(angle) - child.getHeight() / 2f);
+            child.setTranslationX(centerX + distance * (float) Math.cos(angle) - child.getWidth() / 2f);
+            child.setTranslationY(centerY + distance * (float) Math.sin(angle) - child.getHeight() / 2f);
             child.setAlpha(Math.min(1f, amount * 1.8f) * (child.isEnabled() ? 1f : .36f));
             child.setScaleX(.76f + .24f * amount);
             child.setScaleY(.76f + .24f * amount);
@@ -191,13 +201,13 @@ final class FanMenu extends ViewGroup {
         if (progress <= 0f) return;
         canvas.save();
         canvas.translate(centerX, centerY);
-        canvas.scale(directionX, directionY);
         float distance = radius * (.62f + .38f * progress);
         arc.set(-distance, -distance, distance, distance);
         if (selection) band(canvas, -165, 117);
         else {
-            band(canvas, -178, 90);
-            band(canvas, 9, 35);
+            band(canvas, -178, 87);
+            band(canvas, 114, 37);
+            band(canvas, 29, 37);
         }
         canvas.restore();
     }
@@ -205,14 +215,14 @@ final class FanMenu extends ViewGroup {
     private void band(Canvas canvas, float start, float sweep) {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setStrokeWidth(55f * unit);
+        paint.setStrokeWidth(45f * unit);
         paint.setColor(0x22243137);
         paint.setAlpha(Math.round(27f * progress));
         canvas.save();
         canvas.translate(0, 2f * unit);
         canvas.drawArc(arc, start, sweep, false, paint);
         canvas.restore();
-        paint.setStrokeWidth(54f * unit);
+        paint.setStrokeWidth(44f * unit);
         paint.setColor(0xFFFFFEFA);
         paint.setAlpha(Math.round(250f * progress));
         canvas.drawArc(arc, start, sweep, false, paint);
@@ -223,9 +233,8 @@ final class FanMenu extends ViewGroup {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
             float x = event.getX(), y = event.getY();
             for (int i = 0; i < getChildCount(); i++) {
-                View child = getChildAt(i);
-                if (child.getAlpha() > .08f && x >= child.getX() && x <= child.getX() + child.getWidth()
-                        && y >= child.getY() && y <= child.getY() + child.getHeight()) {
+                Item child = (Item) getChildAt(i);
+                if (child.getAlpha() > .08f && child.contains(x - child.getX(), y - child.getY())) {
                     if (!child.isEnabled()) return true;
                     return super.dispatchTouchEvent(event);
                 }
@@ -256,6 +265,19 @@ final class FanMenu extends ViewGroup {
             setBackground(new RippleDrawable(ColorStateList.valueOf(0x21167B70), null, rippleMask));
         }
 
+        boolean contains(float x, float y) {
+            float half = getWidth() / 2f;
+            float dx = x - half, dy = y - half;
+            return dx * dx + dy * dy <= half * half;
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent event) {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && !contains(event.getX(), event.getY())) {
+                return false;
+            }
+            return super.onTouchEvent(event);
+        }
+
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             canvas.save();
@@ -272,14 +294,6 @@ final class FanMenu extends ViewGroup {
                 }
                 ink.setColor(color);
                 canvas.drawCircle(0, 0, 13.5f, ink);
-            } else if (id == SELECT) {
-                ink.setColor(0xFFF1F7F4);
-                canvas.drawCircle(0, 0, 22, ink);
-                ink.setStyle(Paint.Style.STROKE);
-                ink.setColor(0xFFD2E4DB);
-                ink.setStrokeWidth(1);
-                canvas.drawCircle(0, 0, 22, ink);
-                glyph(canvas, 0, TEAL);
             } else {
                 int tint = id == CLEAR || id == DELETE ? RED : INK;
                 glyph(canvas, -8, tint);
@@ -311,6 +325,10 @@ final class FanMenu extends ViewGroup {
                 case CLEAR:
                     canvas.drawRect(-7, -6, 7, 6, ink);
                     canvas.drawLine(-4, 2, 4, -2, ink);
+                    break;
+                case OVERVIEW:
+                    canvas.drawRoundRect(-8, -6, 8, 6, 1.5f, 1.5f, ink);
+                    canvas.drawRect(-3, -2, 3, 2, ink);
                     break;
                 case COPY:
                     canvas.drawRoundRect(-3, -4, 7, 7, 1.5f, 1.5f, ink);

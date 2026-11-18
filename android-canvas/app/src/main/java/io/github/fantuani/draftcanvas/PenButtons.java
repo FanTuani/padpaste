@@ -13,7 +13,7 @@ final class PenButtons {
     }
 
     private final Listener listener;
-    private boolean lowerDown, erasing, upperDown, selecting;
+    private boolean lowerDown, erasing, upperDown, selecting, menuDown;
     private long lowerTime, upperTime;
 
     PenButtons(Listener listener) {
@@ -68,6 +68,16 @@ final class PenButtons {
         }
     }
 
+    void menuOnly(boolean down, boolean canceled) {
+        if (down) {
+            menuDown = !canceled && !lowerDown;
+        } else {
+            boolean released = menuDown;
+            menuDown = false;
+            if (released && !canceled && !lowerDown) listener.menu();
+        }
+    }
+
     void holdUpper(long time) {
         if (upperDown && !selecting && time >= upperDeadline()) {
             selecting = true;
@@ -76,7 +86,7 @@ final class PenButtons {
     }
 
     void reset() {
-        upperDown = lowerDown = false;
+        upperDown = lowerDown = menuDown = false;
         if (selecting) {
             selecting = false;
             listener.endSelection(true);

@@ -11,6 +11,8 @@ public final class MainActivity extends Activity {
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70;
     CanvasView canvas;
     private FanMenu menu;
+    private TextView zoom;
+    private double shownScale = Double.NaN;
     private PenButtons penButtons;
     private boolean tapSelection;
     private final Handler penHandler = new Handler(Looper.getMainLooper());
@@ -38,6 +40,15 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(0xFFFAFAF7);
         canvas = new CanvasView(this, ink);
         root.addView(canvas, new FrameLayout.LayoutParams(-1, -1));
+        zoom = new TextView(this);
+        zoom.setTextColor(0xFF7F8C8C);
+        zoom.setTextSize(13);
+        FrameLayout.LayoutParams label = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
+        label.setMarginStart(dp(16));
+        label.bottomMargin = dp(14);
+        root.addView(zoom, label);
+        canvas.changed = this::updateZoom;
+        updateZoom();
         menu = new FanMenu(this, new FanMenu.Actions() {
             @Override public void color(int color) { canvas.setPenColor(color); }
             @Override public void command(int id) { menuCommand(id); }
@@ -65,8 +76,7 @@ public final class MainActivity extends Activity {
             }
             @Override public void menu() {
                 if (tapSelection) finishSelection(true);
-                if (menu.isOpen()) menu.dismiss(true);
-                else showTools(canvas.menuAnchor());
+                showTools(canvas.menuAnchor());
             }
             @Override public void beginSelection() {
                 menu.dismiss(false);
@@ -79,6 +89,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showTools(PointF p) {
+        if (menu.hasToolsAt(p.x, p.y)) return;
         canvas.finishContactForMenu();
         menu.showTools(p.x, p.y, canvas.color, !canvas.ink.strokes.isEmpty());
     }
@@ -86,7 +97,7 @@ public final class MainActivity extends Activity {
     private void finishSelection(boolean canceled) {
         tapSelection = false;
         PointF p = canvas.endSelectionHold(canceled);
-        if (!canceled) {
+        if (p != null) {
             menu.showSelection(p.x, p.y, !canvas.ink.selected.isEmpty(), canvas.ink.canPaste());
         }
     }
@@ -110,6 +121,9 @@ public final class MainActivity extends Activity {
                             canvas.refresh();
                         }).show();
                 break;
+            case FanMenu.OVERVIEW:
+                canvas.overview();
+                break;
             case FanMenu.COPY:
                 ink.copy();
                 break;
@@ -126,6 +140,13 @@ public final class MainActivity extends Activity {
                 break;
             default:
         }
+    }
+
+    private void updateZoom() {
+        double scale = canvas.ink.view.scale;
+        if (scale == shownScale) return;
+        shownScale = scale;
+        zoom.setText(String.format(Locale.ROOT, scale < .1 ? "%.2f%%" : "%.0f%%", scale * 100));
     }
 
     private TextView action(String title, Runnable clicked) {
@@ -155,9 +176,14 @@ public final class MainActivity extends Activity {
                 penHandler.removeCallbacks(lowerHold);
                 if(down&&!event.isCanceled())penHandler.postAtTime(lowerHold,penButtons.lowerDeadline());
             } else {
-                penButtons.upper(down, event.getEventTime(), event.isCanceled());
                 penHandler.removeCallbacks(upperHold);
-                if (down && !event.isCanceled()) penHandler.postAtTime(upperHold, penButtons.upperDeadline());
+                if (key == KeyEvent.KEYCODE_PAGE_UP) {
+                    // HyperOS owns the long press and may deliver a queued DOWN much later.
+                    penButtons.menuOnly(down, event.isCanceled());
+                } else {
+                    penButtons.upper(down, event.getEventTime(), event.isCanceled());
+                    if (down && !event.isCanceled()) penHandler.postAtTime(upperHold, penButtons.upperDeadline());
+                }
             }
             return true;
         }

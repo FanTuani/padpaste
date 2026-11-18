@@ -87,6 +87,21 @@ public final class CanvasTestRunner extends Instrumentation {
             check(release.x == 620 && release.y == 720, "selection menu must anchor at the rectangle endpoint");
             pen(v, MotionEvent.ACTION_UP, 620, 720);
             check(d.strokes.size() == 1, "lifting after selection wrote an extra stroke");
+            v.beginSelectionHold();
+            check(v.endSelectionHold(false) == null, "a hold with no marquee must not open selection actions");
+            v.beginSelectionHold();
+            pen(v, MotionEvent.ACTION_DOWN, 520, 700);
+            pen(v, MotionEvent.ACTION_UP, 521, 700);
+            check(v.endSelectionHold(false) == null, "a pen tap must not open selection actions");
+            v.beginSelectionHold();
+            pen(v, MotionEvent.ACTION_DOWN, 800, 800);
+            pen(v, MotionEvent.ACTION_MOVE, 950, 930);
+            pen(v, MotionEvent.ACTION_UP, 950, 930);
+            check(v.endSelectionHold(false) != null && d.selected.isEmpty(),
+                    "a finished empty rectangle must still allow paste");
+            v.overview();
+            check(Math.abs(d.view.x - 550) < .1 && Math.abs(d.view.y - 700) < .1,
+                    "overview must center existing ink");
             v.refresh();
         });
         result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, side-button selection release\n");finish(Activity.RESULT_OK,result);

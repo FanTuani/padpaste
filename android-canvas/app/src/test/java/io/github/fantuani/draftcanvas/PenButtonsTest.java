@@ -23,4 +23,18 @@ public class PenButtonsTest {
         b.upper(true, 1000, false); b.holdUpper(1200); b.reset();
         b.upper(false, 1400, false); assertEquals(1, s.cancels); assertEquals(0, s.finishes);
     }
+    @Test public void hyperOsQueuedPressOnlyOpensToolsEvenWhenHeldPastThreshold() {
+        State s = new State();
+        PenButtons buttons = new PenButtons(s);
+        buttons.menuOnly(true, false);
+        buttons.holdUpper(PenButtons.HOLD_MS + 1000);
+        buttons.menuOnly(false, false);
+        assertEquals(1, s.menus);
+        assertEquals(0, s.starts);
+        assertEquals(0, s.finishes);
+        buttons.menuOnly(true, false);
+        buttons.reset();
+        buttons.menuOnly(false, false);
+        assertEquals(1, s.menus);
+    }
 }
