@@ -44,6 +44,7 @@ public final class CanvasView extends View {
     private final ArrayList<Float> samples=new ArrayList<>();private double strokeX,strokeY;
     private int strokeColor;private float strokeWidth;
     private boolean fingers;private int fingerCount;private float prevX,prevY,prevDistance;
+    private long prevFingerEventTime;
     private double gestureX,gestureY,gestureScale;
     private final Viewport.Pinch pinch = new Viewport.Pinch();
     public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);eraserSize=dp(24);setBackgroundColor(0xFFFAFAF7);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
@@ -356,18 +357,21 @@ public final class CanvasView extends View {
             prevX = cx;
             prevY = cy;
             prevDistance = distance;
+            prevFingerEventTime = e.getEventTime();
             return true;
         }
         if (action == MotionEvent.ACTION_MOVE && !fingerTap) {
             double anchorX = wx(prevX), anchorY = wy(prevY);
+            long eventTime = e.getEventTime();
             if (count == 2 && prevDistance > 1 && distance > 1) {
-                ink.view.scale = pinch.update((double) distance / prevDistance);
+                ink.view.scale = pinch.update((double) distance / prevDistance, eventTime - prevFingerEventTime);
             }
             ink.view.x = anchorX - (cx - getWidth() / 2.0) / ink.view.scale;
             ink.view.y = anchorY - (cy - getHeight() / 2.0) / ink.view.scale;
             prevX = cx;
             prevY = cy;
             prevDistance = distance;
+            prevFingerEventTime = eventTime;
             refresh();
         }
         return true;

@@ -17,28 +17,58 @@ public final class CanvasTestRunner extends Instrumentation {
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
 
-    private void checkPinchSnap(CanvasView view, double startScale, int snapRadius, int holdRadius, int releaseRadius) {
-        Viewport viewport = view.ink.view;
-        viewport.scale = startScale;
+    private void beginPinch(CanvasView view, double startScale) {
+        view.ink.view.scale = startScale;
         int finger = MotionEvent.TOOL_TYPE_FINGER;
         int secondPointer = 1 << MotionEvent.ACTION_POINTER_INDEX_SHIFT;
-        double anchorX = viewport.worldX(400, view.getWidth());
-        double anchorY = viewport.worldY(300, view.getHeight());
         event(view, finger, MotionEvent.ACTION_DOWN, 300, 300);
         event(view, finger, MotionEvent.ACTION_POINTER_DOWN | secondPointer, 300, 300, 500, 300);
-        event(view, finger, MotionEvent.ACTION_MOVE, 410 - snapRadius, 320, 410 + snapRadius, 320);
+    }
+
+    private void movePinch(CanvasView view, float radius) {
+        event(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_MOVE, 410 - radius, 320, 410 + radius, 320);
+    }
+
+    private void movePinchSlowly(CanvasView view, int from, int to) {
+        float step = to > from ? .5f : -.5f;
+        for (int i = 1; i <= 2 * Math.abs(to - from); i++) movePinch(view, from + i * step);
+    }
+
+    private void endPinch(CanvasView view, float radius) {
+        int finger = MotionEvent.TOOL_TYPE_FINGER;
+        int secondPointer = 1 << MotionEvent.ACTION_POINTER_INDEX_SHIFT;
+        event(view, finger, MotionEvent.ACTION_POINTER_UP | secondPointer, 410 - radius, 320, 410 + radius, 320);
+        event(view, finger, MotionEvent.ACTION_UP, 410 - radius, 320);
+    }
+
+    private void checkPinchSnap(CanvasView view, double startScale, int snapRadius, int holdRadius,
+                                int releaseRadius, boolean accelerateToRelease) {
+        beginPinch(view, startScale);
+        Viewport viewport = view.ink.view;
+        double anchorX = viewport.worldX(400, view.getWidth());
+        double anchorY = viewport.worldY(300, view.getHeight());
+        movePinchSlowly(view, 100, snapRadius);
         check(viewport.scale == 1, "pinch must snap to exactly 100%");
         check(Math.abs(viewport.worldX(410, view.getWidth()) - anchorX) < .001
                 && Math.abs(viewport.worldY(320, view.getHeight()) - anchorY) < .001,
                 "snap must preserve the canvas point under the moving pinch center");
-        event(view, finger, MotionEvent.ACTION_MOVE, 410 - holdRadius, 320, 410 + holdRadius, 320);
+        movePinchSlowly(view, snapRadius, holdRadius);
         check(viewport.scale == 1, "small finger movement must keep the pinch snapped");
-        event(view, finger, MotionEvent.ACTION_MOVE, 410 - releaseRadius, 320, 410 + releaseRadius, 320);
+        if (accelerateToRelease) movePinch(view, releaseRadius);
+        else movePinchSlowly(view, holdRadius, releaseRadius);
         check(Math.abs(viewport.scale - startScale * releaseRadius / 100) < .001,
                 "continued pinch must release the snap at the requested scale");
-        event(view, finger, MotionEvent.ACTION_POINTER_UP | secondPointer,
-                410 - releaseRadius, 320, 410 + releaseRadius, 320);
-        event(view, finger, MotionEvent.ACTION_UP, 410 - releaseRadius, 320);
+        endPinch(view, releaseRadius);
+    }
+
+    private void checkFastPinch(CanvasView view, double startScale, int... radii) {
+        beginPinch(view, startScale);
+        for (int radius : radii) {
+            movePinch(view, radius);
+            check(Math.abs(view.ink.view.scale - startScale * radius / 100) < .001,
+                    "fast pinch must pass through the snap range directly");
+        }
+        endPinch(view, radii[radii.length - 1]);
     }
 
     @android.annotation.TargetApi(29)
@@ -65,8 +95,21 @@ public final class CanvasTestRunner extends Instrumentation {
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,250,300,550,300);
             check(Math.abs(d.view.scale-1.5)<.01,"two finger zoom failed");
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_POINTER_UP|(1<<8),250,300,550,300);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,250,300);
-            checkPinchSnap(v, .92, 108, 112, 122);
-            checkPinchSnap(v, 1.10, 94, 90, 82);
+            checkFastPinch(v, .92, 104, 108, 112, 122);
+            checkFastPinch(v, 1.10, 97, 94, 90, 82);
+            checkFastPinch(v, 1, 104, 112);
+            checkPinchSnap(v, .92, 108, 112, 122, false);
+            checkPinchSnap(v, 1.10, 94, 90, 82, false);
+            checkPinchSnap(v, .92, 107, 108, 111, true);
+            beginPinch(v, .80);
+            movePinch(v, 112);
+            movePinchSlowly(v, 112, 121);
+            check(d.view.scale == 1, "slowing down near 100% must enable snap within the same gesture");
+            endPinch(v, 121);
+            beginPinch(v, 1);
+            movePinchSlowly(v, 100, 102);
+            check(Math.abs(d.view.scale - 1.02) < .001, "a new pinch at 100% must be free to zoom away");
+            endPinch(v, 102);
             d.strokes.clear();d.view.x=v.getWidth()/2.0;d.view.y=v.getHeight()/2.0;d.view.scale=1;
             int inkColor=0xff243137;d.add(new Ink.Stroke(d.nextId(),inkColor,20,500,800,new float[]{0,0,1,300,0,1}));
             d.begin();d.erase(600,807,600,807,5);d.commit();

@@ -19,20 +19,42 @@ public final class Viewport {
     static final class Pinch {
         private static final double SNAP_RANGE = .04;
         private static final double RELEASE_RANGE = .08;
+        private static final double SNAP_SPEED = .55;
+        private static final double RELEASE_SPEED = .95;
+        private static final double FAST_SAMPLE_SPEED = 1.4;
+        private static final double SPEED_SMOOTHING_SECONDS = .045;
         private double freeScale;
+        private double speed;
         private boolean snapped;
 
         void start(double scale) {
             freeScale = scale;
-            snapped = scale == 1;
+            speed = Double.NaN;
+            snapped = false;
         }
 
-        double update(double factor) {
+        double update(double factor, long elapsedMillis) {
             // Keep accumulating finger movement while the displayed scale is held at 100%.
+            double previousScale = freeScale;
             freeScale = clampScale(freeScale * factor);
-            double range = snapped ? RELEASE_RANGE : SNAP_RANGE;
-            snapped = freeScale >= 1 - range && freeScale <= 1 + range;
+            // Measure fractional span change per second, independent of the starting span.
+            double seconds = Math.max(1, Math.min(48, elapsedMillis)) / 1000.0;
+            double sampleSpeed = Math.abs(Math.log(factor)) / seconds;
+            double weight = Math.exp(-seconds / SPEED_SMOOTHING_SECONDS);
+            speed = Double.isNaN(speed) ? sampleSpeed : weight * speed + (1 - weight) * sampleSpeed;
+            boolean fast = sampleSpeed >= FAST_SAMPLE_SPEED;
+
+            if (snapped) {
+                snapped = !fast && speed <= RELEASE_SPEED && nearActualSize(RELEASE_RANGE);
+            } else {
+                boolean towardActualSize = previousScale < 1 && factor > 1 || previousScale > 1 && factor < 1;
+                snapped = towardActualSize && !fast && speed <= SNAP_SPEED && nearActualSize(SNAP_RANGE);
+            }
             return snapped ? 1 : freeScale;
+        }
+
+        private boolean nearActualSize(double range) {
+            return freeScale >= 1 - range && freeScale <= 1 + range;
         }
     }
 }
