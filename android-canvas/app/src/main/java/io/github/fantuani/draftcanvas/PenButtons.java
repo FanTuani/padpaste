@@ -1,25 +1,89 @@
 package io.github.fantuani.draftcanvas;
 
-/** Key-repeat safe press/hold state, independent of Android event dispatch. */
-public final class PenButtons {
-    public static final long HOLD_MS=200;
-    public interface Listener { void eraser(boolean held);void undo();void toggleColor(); }
-    private final Listener listener;private boolean lower,held,upper;private long lowerDown,upperDown;
-    public PenButtons(Listener listener){this.listener=listener;}
-    public long lowerDeadline(){return lowerDown+HOLD_MS;}
-    public void lower(boolean down,long time,boolean canceled){
-        if(down){if(!lower&&!canceled){lower=true;lowerDown=time;}return;}
-        if(!lower)return;
-        lower=false;
-        if(held){held=false;listener.eraser(false);}
-        else if(!canceled&&time>=lowerDown&&time-lowerDown<HOLD_MS)listener.undo();
+/** Keeps Android key repeats and canceled gestures out of the tool callbacks. */
+final class PenButtons {
+    static final long HOLD_MS = 200;
+
+    interface Listener {
+        void eraser(boolean held);
+        void undo();
+        void menu();
+        void beginSelection();
+        void endSelection(boolean canceled);
     }
-    public void hold(long time){
-        if(lower&&!held&&time>=lowerDeadline()){held=true;listener.eraser(true);}
+
+    private final Listener listener;
+    private boolean lowerDown, erasing, upperDown, selecting;
+    private long lowerTime, upperTime;
+
+    PenButtons(Listener listener) {
+        this.listener = listener;
     }
-    public void upper(boolean down,long time,boolean canceled){
-        if(down){if(!upper){upper=true;upperDown=time;}return;}
-        if(upper){upper=false;if(!canceled&&time>=upperDown&&time-upperDown<=500)listener.toggleColor();}
+
+    long lowerDeadline() { return lowerTime + HOLD_MS; }
+    long upperDeadline() { return upperTime + HOLD_MS; }
+
+    void lower(boolean down, long time, boolean canceled) {
+        if (down) {
+            if (!lowerDown && !canceled && !upperDown) {
+                lowerDown = true;
+                lowerTime = time;
+            }
+            return;
+        }
+        if (!lowerDown) return;
+        lowerDown = false;
+        if (erasing) {
+            erasing = false;
+            listener.eraser(false);
+        } else if (!canceled && time >= lowerTime && time < lowerDeadline()) {
+            listener.undo();
+        }
     }
-    public void reset(){upper=false;lower=false;if(held){held=false;listener.eraser(false);}}
+
+    void hold(long time) {
+        if (lowerDown && !erasing && time >= lowerDeadline()) {
+            erasing = true;
+            listener.eraser(true);
+        }
+    }
+
+    void upper(boolean down, long time, boolean canceled) {
+        if (down) {
+            if (!upperDown && !canceled && !lowerDown) {
+                upperDown = true;
+                upperTime = time;
+            }
+            return;
+        }
+        if (!upperDown) return;
+        // A busy UI can deliver the UP before the hold callback runs.
+        if (!canceled) holdUpper(time);
+        upperDown = false;
+        if (selecting) {
+            selecting = false;
+            listener.endSelection(canceled);
+        } else if (!canceled && time >= upperTime) {
+            listener.menu();
+        }
+    }
+
+    void holdUpper(long time) {
+        if (upperDown && !selecting && time >= upperDeadline()) {
+            selecting = true;
+            listener.beginSelection();
+        }
+    }
+
+    void reset() {
+        upperDown = lowerDown = false;
+        if (selecting) {
+            selecting = false;
+            listener.endSelection(true);
+        }
+        if (erasing) {
+            erasing = false;
+            listener.eraser(false);
+        }
+    }
 }

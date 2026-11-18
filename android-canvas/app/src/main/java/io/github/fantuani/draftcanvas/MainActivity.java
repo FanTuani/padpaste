@@ -3,44 +3,141 @@ package io.github.fantuani.draftcanvas;
 import android.app.*;
 import android.os.*;
 import android.graphics.*;
-import android.graphics.drawable.GradientDrawable;
 import android.view.*;
 import android.widget.*;
 import java.util.*;
 
 public final class MainActivity extends Activity {
-    private static final int INK=0xFF243137,TEAL=0xFF167B70,MUTED=0xFF7F8C8C;
+    private static final int INK = 0xFF243137, TEAL = 0xFF167B70;
     CanvasView canvas;
-    private TextView pen,select,erase,undo,redo,paste,zoom,selectionLabel;
-    private LinearLayout selectionBar;
-    private int lastColor;
+    private FanMenu menu;
     private PenButtons penButtons;
-    private final Handler penHandler=new Handler(Looper.getMainLooper());
-    private final Runnable lowerHold=()->{if(penButtons!=null)penButtons.hold(SystemClock.uptimeMillis());};
-    private final Map<Integer,Swatch> swatches=new LinkedHashMap<>();
-    private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
-    private GradientDrawable bg(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
-    @Override public void onCreate(Bundle state){super.onCreate(state);if(Build.VERSION.SDK_INT>=27)getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);Ink ink=getLastNonConfigurationInstance() instanceof Ink?(Ink)getLastNonConfigurationInstance():new Ink();build(ink);}
-    @Override public Object onRetainNonConfigurationInstance(){return canvas.ink;}
-    private TextView action(String title,Runnable clicked){TextView t=new TextView(this);t.setText(title);t.setTextSize(14);t.setTextColor(INK);t.setGravity(Gravity.CENTER);t.setPadding(dp(14),0,dp(14),0);t.setMinWidth(dp(48));t.setContentDescription(title);t.setOnClickListener(v->clicked.run());return t;}
-    private void add(LinearLayout row,View child,int width){row.addView(child,new LinearLayout.LayoutParams(width<0?width:dp(width),dp(44)));}
-    private void divider(LinearLayout row){View line=new View(this);line.setBackgroundColor(0xFFE3E8E5);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(1),dp(24));p.leftMargin=dp(9);p.rightMargin=dp(9);p.gravity=Gravity.CENTER_VERTICAL;row.addView(line,p);}
-    private LinearLayout bar(){LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(8),dp(6),dp(8),dp(6));row.setBackground(bg(Color.WHITE,20));row.setElevation(dp(5));return row;}
-    private void build(Ink ink){
-        FrameLayout root=new FrameLayout(this);root.setFitsSystemWindows(true);root.setBackgroundColor(0xFFFAFAF7);canvas=new CanvasView(this,ink);root.addView(canvas,new FrameLayout.LayoutParams(-1,-1));
-        HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);scroll.setClipToPadding(false);scroll.setPadding(dp(14),dp(10),dp(14),dp(12));
-        LinearLayout tools=bar();TextView brand=action("草稿",()->canvas.overview());brand.setTextSize(20);brand.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));add(tools,brand,-2);divider(tools);
-        pen=action("书写",()->canvas.tool(CanvasView.PEN));select=action("框选",()->{canvas.tool(CanvasView.SELECT);hint("用笔框选，拖动选区");});erase=action("橡皮",()->canvas.tool(CanvasView.ERASE));add(tools,pen,64);add(tools,select,64);add(tools,erase,64);divider(tools);
-        for(int c:new int[]{INK,0xFF3169CA,0xFFCF4941,0xFF167B70,0xFFBA761F,0xFF8655B2}){Swatch swatch=new Swatch(c);swatches.put(c,swatch);add(tools,swatch,40);swatch.setOnClickListener(v->{canvas.color=c;canvas.tool(CanvasView.PEN);update();});}
-        TextView size=action("粗细",()->showWidths());add(tools,size,60);divider(tools);
-        undo=action("撤销",()->canvas.undo());redo=action("重做",()->{canvas.tool(canvas.mode);ink.redo();canvas.refresh();});paste=action("粘贴",()->paste());add(tools,undo,60);add(tools,redo,60);add(tools,paste,60);
-        scroll.addView(tools);FrameLayout.LayoutParams tp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.CENTER_HORIZONTAL);tp.topMargin=dp(10);root.addView(scroll,tp);
-        selectionBar=bar();selectionLabel=action("",()->{});add(selectionBar,selectionLabel,-2);divider(selectionBar);add(selectionBar,action("复制",()->{ink.copy();update();hint("已复制选区");}),64);add(selectionBar,action("粘贴",this::paste),64);add(selectionBar,action("删除",()->{ink.deleteSelected();canvas.refresh();}),64);add(selectionBar,action("取消",()->{ink.selected.clear();canvas.refresh();}),64);
-        FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);sp.bottomMargin=dp(getResources().getConfiguration().screenWidthDp<840?80:24);root.addView(selectionBar,sp);
-        LinearLayout position=new LinearLayout(this);position.setGravity(Gravity.CENTER_VERTICAL);zoom=action("100%",()->{canvas.ink.view.scale=1;canvas.refresh();});zoom.setTextColor(MUTED);add(position,zoom,-2);TextView overview=action("总览",()->canvas.overview());overview.setTextColor(MUTED);add(position,overview,-2);FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(-2,dp(48),Gravity.BOTTOM|Gravity.LEFT);pp.leftMargin=dp(16);pp.bottomMargin=dp(14);root.addView(position,pp);
-        TextView clear=action("清空",()->{if(ink.strokes.isEmpty())return;new AlertDialog.Builder(this).setTitle("清空草稿？").setNegativeButton("取消",null).setPositiveButton("清空",(d,w)->{ink.clear();canvas.refresh();}).show();});clear.setTextColor(MUTED);FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(72),dp(48),Gravity.BOTTOM|Gravity.RIGHT);cp.rightMargin=dp(16);cp.bottomMargin=dp(14);root.addView(clear,cp);
-        canvas.changed=this::update;penButtons=new PenButtons(new PenButtons.Listener(){public void eraser(boolean held){canvas.temporaryEraser(held);}public void undo(){canvas.undo();}public void toggleColor(){canvas.setPenColor(canvas.color==INK?0xFFCF4941:INK);}});setContentView(root);update();
+    private boolean tapSelection;
+    private final Handler penHandler = new Handler(Looper.getMainLooper());
+    private final Runnable lowerHold = () -> penButtons.hold(SystemClock.uptimeMillis());
+    private final Runnable upperHold = () -> penButtons.holdUpper(SystemClock.uptimeMillis());
+
+    private int dp(float n) { return Math.round(n * getResources().getDisplayMetrics().density); }
+
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state);
+        if (Build.VERSION.SDK_INT >= 27) {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        }
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        Object retained = getLastNonConfigurationInstance();
+        build(retained instanceof Ink ? (Ink) retained : new Ink());
     }
+
+    @Override public Object onRetainNonConfigurationInstance() { return canvas.ink; }
+
+    private void build(Ink ink) {
+        FrameLayout root = new FrameLayout(this);
+        root.setFitsSystemWindows(true);
+        root.setBackgroundColor(0xFFFAFAF7);
+        canvas = new CanvasView(this, ink);
+        root.addView(canvas, new FrameLayout.LayoutParams(-1, -1));
+        menu = new FanMenu(this, new FanMenu.Actions() {
+            @Override public void color(int color) { canvas.setPenColor(color); }
+            @Override public void command(int id) { menuCommand(id); }
+        });
+        root.addView(menu, new FrameLayout.LayoutParams(-1, -1));
+        canvas.marqueeFinished = () -> {
+            if (tapSelection) finishSelection(false);
+        };
+        canvas.setOnClickListener(view -> {
+            if (tapSelection) finishSelection(true);
+            else showTools(canvas.touchAnchor());
+        });
+        penButtons = new PenButtons(new PenButtons.Listener() {
+            @Override public void eraser(boolean held) {
+                if (held) {
+                    menu.dismiss(false);
+                    if (tapSelection) finishSelection(true);
+                }
+                canvas.temporaryEraser(held);
+            }
+            @Override public void undo() {
+                menu.dismiss(false);
+                if (tapSelection) finishSelection(true);
+                canvas.undo();
+            }
+            @Override public void menu() {
+                if (tapSelection) finishSelection(true);
+                if (menu.isOpen()) menu.dismiss(true);
+                else showTools(canvas.menuAnchor());
+            }
+            @Override public void beginSelection() {
+                menu.dismiss(false);
+                if (tapSelection) finishSelection(true);
+                canvas.beginSelectionHold();
+            }
+            @Override public void endSelection(boolean canceled) { finishSelection(canceled); }
+        });
+        setContentView(root);
+    }
+
+    private void showTools(PointF p) {
+        canvas.finishContactForMenu();
+        menu.showTools(p.x, p.y, canvas.color, !canvas.ink.strokes.isEmpty());
+    }
+
+    private void finishSelection(boolean canceled) {
+        tapSelection = false;
+        PointF p = canvas.endSelectionHold(canceled);
+        if (!canceled) {
+            menu.showSelection(p.x, p.y, !canvas.ink.selected.isEmpty(), canvas.ink.canPaste());
+        }
+    }
+
+    private void menuCommand(int id) {
+        Ink ink = canvas.ink;
+        switch (id) {
+            case FanMenu.SELECT:
+                tapSelection = true;
+                canvas.beginSelectionHold();
+                break;
+            case FanMenu.SIZE:
+                showWidths();
+                break;
+            case FanMenu.CLEAR:
+                if (ink.strokes.isEmpty()) break;
+                new AlertDialog.Builder(this).setTitle("清空草稿？")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("清空", (dialog, which) -> {
+                            ink.clear();
+                            canvas.refresh();
+                        }).show();
+                break;
+            case FanMenu.COPY:
+                ink.copy();
+                break;
+            case FanMenu.PASTE:
+                ink.paste(canvas.getWidth(), canvas.getHeight());
+                canvas.refresh();
+                break;
+            case FanMenu.DELETE:
+                ink.deleteSelected();
+                canvas.refresh();
+                break;
+            case FanMenu.CANCEL:
+                canvas.clearSelection();
+                break;
+            default:
+        }
+    }
+
+    private TextView action(String title, Runnable clicked) {
+        TextView text = new TextView(this);
+        text.setText(title);
+        text.setTextSize(14);
+        text.setTextColor(INK);
+        text.setGravity(Gravity.CENTER);
+        text.setOnClickListener(view -> clicked.run());
+        return text;
+    }
+
     private boolean isPenKeyboard(KeyEvent event){
         InputDevice device=event.getDevice();if(device==null)return false;
         String name=device.getName().toLowerCase(Locale.ROOT);
@@ -57,21 +154,52 @@ public final class MainActivity extends Activity {
                 penButtons.lower(down,event.getEventTime(),event.isCanceled());
                 penHandler.removeCallbacks(lowerHold);
                 if(down&&!event.isCanceled())penHandler.postAtTime(lowerHold,penButtons.lowerDeadline());
-            }else penButtons.upper(down,event.getEventTime(),event.isCanceled());return true;
+            } else {
+                penButtons.upper(down, event.getEventTime(), event.isCanceled());
+                penHandler.removeCallbacks(upperHold);
+                if (down && !event.isCanceled()) penHandler.postAtTime(upperHold, penButtons.upperDeadline());
+            }
+            return true;
         }
         return super.dispatchKeyEvent(event);
     }
-    private void resetPenButtons(){penHandler.removeCallbacks(lowerHold);if(penButtons!=null)penButtons.reset();}
-    @Override protected void onPause(){resetPenButtons();super.onPause();}
-    @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(!focused)resetPenButtons();}
-    private void hint(String value){Toast.makeText(this,value,Toast.LENGTH_SHORT).show();}
-    private void paste(){canvas.ink.paste(canvas.getWidth(),canvas.getHeight());canvas.mode=CanvasView.SELECT;canvas.refresh();}
-    private void update(){
-        for(TextView t:new TextView[]{pen,select,erase}){boolean selected=(t==pen&&canvas.displayMode()==CanvasView.PEN)||(t==select&&canvas.displayMode()==CanvasView.SELECT)||(t==erase&&canvas.displayMode()==CanvasView.ERASE);if(t.isSelected()!=selected){t.setBackground(bg(selected?0xFFE7F2EE:Color.TRANSPARENT,12));t.setTextColor(selected?TEAL:INK);t.setSelected(selected);}}
-        undo.setEnabled(canvas.ink.canUndo());undo.setAlpha(undo.isEnabled()?1:.3f);redo.setEnabled(canvas.ink.canRedo());redo.setAlpha(redo.isEnabled()?1:.3f);paste.setEnabled(canvas.ink.canPaste());paste.setAlpha(paste.isEnabled()?1:.3f);
-        int n=canvas.ink.selected.size();selectionBar.setVisibility(n>0?View.VISIBLE:View.GONE);String label="已选 "+n+" 笔";if(!selectionLabel.getText().toString().equals(label))selectionLabel.setText(label);String z=String.format(Locale.ROOT,canvas.ink.view.scale>=.1?"%.0f%%":"%.2f%%",canvas.ink.view.scale*100);if(!zoom.getText().toString().equals(z))zoom.setText(z);
-        if(lastColor!=canvas.color){lastColor=canvas.color;for(Swatch s:swatches.values())s.invalidate();}
+    private void resetPenButtons() {
+        penHandler.removeCallbacks(lowerHold);
+        penHandler.removeCallbacks(upperHold);
+        if (penButtons != null) penButtons.reset();
+        if (tapSelection) finishSelection(true);
+        if (menu != null) menu.dismiss(false);
     }
+
+    @Override protected void onPause() {
+        resetPenButtons();
+        super.onPause();
+    }
+
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) resetPenButtons();
+    }
+
+    @Override public boolean dispatchKeyShortcutEvent(KeyEvent event) {
+        if (event.isCtrlPressed() && event.getKeyCode() == KeyEvent.KEYCODE_Z
+                && event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.isShiftPressed()) {
+                canvas.ink.redo();
+                canvas.refresh();
+            } else canvas.undo();
+            return true;
+        }
+        return super.dispatchKeyShortcutEvent(event);
+    }
+
+    @Override public void onBackPressed() {
+        if (menu.isOpen()) menu.dismiss(true);
+        else if (tapSelection) finishSelection(true);
+        else if (!canvas.ink.selected.isEmpty()) canvas.clearSelection();
+        else super.onBackPressed();
+    }
+
     private void showWidths(){
         float density=getResources().getDisplayMetrics().density;
         LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(24),dp(8),dp(24),dp(8));panel.setMinimumWidth(dp(340));
@@ -94,10 +222,5 @@ public final class MainActivity extends Activity {
         row.addView(minus,new LinearLayout.LayoutParams(dp(44),dp(56)));row.addView(slider,new LinearLayout.LayoutParams(0,dp(56),1));row.addView(plus,new LinearLayout.LayoutParams(dp(44),dp(56)));group.addView(row);
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}public void onProgressChanged(SeekBar s,int value,boolean user){float v=min+value*step;label.setText(title+"  "+String.format(Locale.ROOT,"%.1f",v));change.accept(v);}});
         return group;
-    }
-    private final class Swatch extends View {
-        private final int color;private final Paint p=new Paint(3);Swatch(int c){super(MainActivity.this);color=c;setContentDescription(color==INK?"墨黑":color==0xFF3169CA?"蓝色":color==0xFFCF4941?"红色":color==0xFF167B70?"绿色":color==0xFFBA761F?"橙色":"紫色");setClickable(true);setFocusable(true);}
-        @Override protected void onDraw(android.graphics.Canvas c){float x=getWidth()/2f,y=getHeight()/2f;p.setStyle(Paint.Style.FILL);p.setColor(color);c.drawCircle(x,y,dp(10),p);if(canvas.color==color){p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(dp(1.5f));c.drawCircle(x,y,dp(14),p);}}
-        @Override public boolean performClick(){super.performClick();return true;}
     }
 }
