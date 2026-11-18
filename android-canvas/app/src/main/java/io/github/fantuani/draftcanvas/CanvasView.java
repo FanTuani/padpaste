@@ -41,7 +41,8 @@ public final class CanvasView extends View {
     private boolean cursorKnown,erasePoint;private float cursorRadius;
     private double eraseX,eraseY,eraseRadius;
     private double startX,startY,dragX,dragY;
-    private final ArrayList<Float> samples=new ArrayList<>();private double strokeX,strokeY;
+    private final LiveStroke liveStroke = new LiveStroke();
+    private double strokeX,strokeY;
     private int strokeColor;private float strokeWidth;
     private boolean fingers;private int fingerCount;private float prevX,prevY,prevDistance;
     private double gestureX,gestureY,gestureScale;
@@ -158,7 +159,14 @@ public final class CanvasView extends View {
         }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
-        if(!samples.isEmpty()&&!erasing&&!dragging&&!marquee)drawStroke(c,activeStroke(),0,0,wx(0)-strokeX,wy(0)-strokeY,wx(getWidth())-strokeX,wy(getHeight())-strokeY);
+        if (!liveStroke.isEmpty()) {
+            c.save();
+            c.translate(screenX(strokeX), screenY(strokeY));
+            c.scale((float)ink.view.scale, (float)ink.view.scale);
+            setStrokePaint(strokeColor, strokeWidth);
+            liveStroke.draw(c, paint, strokeWidth);
+            c.restore();
+        }
         double[] bounds=ink.selectionBounds();
         if(marquee)bounds=new double[]{Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY)};
         else if(bounds!=null){bounds[0]+=dragX;bounds[2]+=dragX;bounds[1]+=dragY;bounds[3]+=dragY;}
@@ -195,12 +203,6 @@ public final class CanvasView extends View {
         }
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeWidth(dp(1.6f));paint.setColor(0xFFB9C4BC);c.drawPoints(gridPoints,0,gridCount,paint);
     }
-    private Path centerline(Ink.Stroke s){
-        float[] points=s.pathPoints();
-        Path path=new Path();path.moveTo(points[0],points[1]);
-        for(int i=3;i<points.length;i+=3)path.lineTo(points[i],points[i+1]);
-        return path;
-    }
     private Path sectionPath(StrokeData data,double start,double end){
         Path path=new Path();path.moveTo(data.coordinate(start,0),data.coordinate(start,1));
         for(int i=(int)Math.floor(start)+1;i<end;i++)path.lineTo(data.points[i*3],data.points[i*3+1]);
@@ -221,15 +223,16 @@ public final class CanvasView extends View {
     }
     private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy,double l,double t,double r,double b){
         c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
-        paint.setColor(s.color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(s.width);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
+        setStrokePaint(s.color, s.width);
         if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
-        else if(s.id==0)c.drawPath(centerline(s),paint);
         else {StrokeData data=s.data();drawSections(c,s,data,data.root,l,t,r,b);}c.restore();
     }
-    private Ink.Stroke activeStroke(){float[] p=new float[samples.size()];for(int i=0;i<p.length;i++)p[i]=samples.get(i);return new Ink.Stroke(0,strokeColor,strokeWidth,strokeX,strokeY,p);}
-    private void append(float x,float y,float pressure){
-        float lx=(float)(wx(x)-strokeX),ly=(float)(wy(y)-strokeY);int n=samples.size();if(n>=3&&Math.hypot(lx-samples.get(n-3),ly-samples.get(n-2))*ink.view.scale<.25)return;
-        samples.add(lx);samples.add(ly);samples.add(1f);
+    private void setStrokePaint(int color, float width) {
+        paint.setColor(color);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(width);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
     }
     private void beginPen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);lastTool=e.getToolType(i);cursorKnown=true;
@@ -252,9 +255,14 @@ public final class CanvasView extends View {
             dragY = startY;
             return;
         }
-        samples.clear();strokeX=startX;strokeY=startY;strokeColor=color;strokeWidth=width;append(e.getX(i),e.getY(i),e.getPressure(i));
+        liveStroke.clear();
+        strokeX = startX;
+        strokeY = startY;
+        strokeColor = color;
+        strokeWidth = width;
+        liveStroke.add(0, 0, ink.view.scale, strokeWidth);
     }
-    private void movePen(MotionEvent e,int i){
+    private boolean movePen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);
         lastPen=e.getEventTime();double x=wx(e.getX(i)),y=wy(e.getY(i));
         if(erasing){
@@ -265,7 +273,16 @@ public final class CanvasView extends View {
         }
         else if(dragging){dragX=x-startX;dragY=y-startY;}
         else if(marquee){dragX=x;dragY=y;}
-        else {for(int h=0;h<e.getHistorySize();h++)append(e.getHistoricalX(i,h),e.getHistoricalY(i,h),e.getHistoricalPressure(i,h));append(e.getX(i),e.getY(i),e.getPressure(i));}
+        else {
+            boolean changed = false;
+            for (int h = 0; h < e.getHistorySize(); h++) {
+                changed |= liveStroke.add((float)(wx(e.getHistoricalX(i,h)) - strokeX),
+                        (float)(wy(e.getHistoricalY(i,h)) - strokeY), ink.view.scale, strokeWidth);
+            }
+            changed |= liveStroke.add((float)(x - strokeX), (float)(y - strokeY), ink.view.scale, strokeWidth);
+            return changed;
+        }
+        return true;
     }
     private void erase(double x,double y,float pressure){
         cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(pressure,eraserSensitivity));double radius=cursorRadius/ink.view.scale;
@@ -290,22 +307,35 @@ public final class CanvasView extends View {
                 if (selectionHeld) completedSelection = new PointF(lastX, lastY);
             }
         }
-        else if(!samples.isEmpty()){Ink.Stroke s=activeStroke();Ink.Stroke committed=new Ink.Stroke(ink.nextId(),s.color,s.width,s.x,s.y,s.points);ink.add(committed);if(raster!=null)raster.stroke(ink,committed);added=true;invalidateErasedArea(screenX(s.left),screenY(s.top),screenX(s.right),screenY(s.bottom));}
-        samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased||added){if(raster!=null)raster.noteRevision(ink);postInvalidateOnAnimation();changed.run();}else refresh();
+        else if (!liveStroke.isEmpty()) {
+            Ink.Stroke stroke = new Ink.Stroke(ink.nextId(), strokeColor, strokeWidth, strokeX, strokeY,
+                    liveStroke.copyPoints());
+            ink.add(stroke);
+            if (raster != null) raster.stroke(ink, stroke);
+            added = true;
+            invalidateErasedArea(screenX(stroke.left), screenY(stroke.top), screenX(stroke.right), screenY(stroke.bottom));
+        }
+        liveStroke.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased||added){if(raster!=null)raster.noteRevision(ink);postInvalidateOnAnimation();changed.run();}else refresh();
         if (selectedBox) marqueeFinished.run();
     }
-    private void cancelPen(){if(erasing){ink.cancel();if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);}samples.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
+    private void cancelPen(){if(erasing){ink.cancel();if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);}liveStroke.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
     @Override public boolean onHoverEvent(MotionEvent e){
         if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){
             nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;lastPen=e.getEventTime();
+            boolean redraw = displayMode() == ERASE;
             if (nearPen) {
                 hoverKnown = true;
                 hoverX = lastX = e.getX();
                 hoverY = lastY = e.getY();
-                if (selectionHeld && !selectionUsedContact && penId == -1) updateHoverBox(hoverX, hoverY);
+                if (selectionHeld && !selectionUsedContact && penId == -1) {
+                    redraw |= !hoverBox || boxEndX != hoverX || boxEndY != hoverY;
+                    updateHoverBox(hoverX, hoverY);
+                }
                 cursorKnown = true;
             }
-            cursorRadius=eraserSize/2;postInvalidateOnAnimation();return true;
+            cursorRadius=eraserSize/2;
+            if (redraw) postInvalidateOnAnimation();
+            return true;
         }return super.onHoverEvent(e);
     }
     @Override public boolean onTouchEvent(MotionEvent e){
@@ -328,10 +358,25 @@ public final class CanvasView extends View {
                 return true;
             }
         }
-        if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){int tool=e.getToolType(index);if(tool==MotionEvent.TOOL_TYPE_STYLUS||tool==MotionEvent.TOOL_TYPE_ERASER){beginPen(e,index);postInvalidateOnAnimation();return true;}}
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+            int tool = e.getToolType(index);
+            if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) {
+                beginPen(e, index);
+                if (!liveStroke.isEmpty()) {
+                    requestUnbufferedDispatch(e);
+                    invalidate();
+                } else postInvalidateOnAnimation();
+                return true;
+            }
+        }
         if(penId!=-1){int i=e.findPointerIndex(penId);if(i<0){cancelPen();return true;}if((action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP)&&e.getPointerId(index)==penId){
                 if(Build.VERSION.SDK_INT>=33&&(e.getFlags()&MotionEvent.FLAG_CANCELED)!=0){cancelPen();refresh();}else{movePen(e,i);finishPen();}
-            }else if(action==MotionEvent.ACTION_MOVE){movePen(e,i);postInvalidateOnAnimation();}return true;}
+            } else if (action == MotionEvent.ACTION_MOVE && movePen(e, i)) {
+                if (!liveStroke.isEmpty()) invalidate();
+                else postInvalidateOnAnimation();
+            }
+            return true;
+        }
         if(Build.VERSION.SDK_INT>=33&&action==MotionEvent.ACTION_POINTER_UP&&(e.getFlags()&MotionEvent.FLAG_CANCELED)!=0){if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
         if(action==MotionEvent.ACTION_UP){
             if (fingers) postInvalidateOnAnimation();

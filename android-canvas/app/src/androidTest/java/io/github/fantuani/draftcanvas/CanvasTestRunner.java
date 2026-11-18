@@ -3,6 +3,8 @@ package io.github.fantuani.draftcanvas;
 import android.app.*;
 import android.os.*;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.view.*;
 
 /** Exercises real View dispatch with distinct synthetic pen and finger devices. */
@@ -16,6 +18,31 @@ public final class CanvasTestRunner extends Instrumentation {
         MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
+
+    private void checkLiveTip(CanvasView view) {
+        Bitmap bitmap = Bitmap.createBitmap(240, 160, Bitmap.Config.ARGB_8888);
+        float originalWidth = view.width;
+        view.width = 8;
+        try {
+            Canvas frame = new Canvas(bitmap);
+            frame.translate(-400, -480);
+            pen(view, MotionEvent.ACTION_DOWN, 440, 520);
+            view.draw(frame);
+            check(bitmap.getPixel(40, 40) == view.color, "pen-down dot must appear before pen-up");
+            pen(view, MotionEvent.ACTION_MOVE, 480, 580);
+            pen(view, MotionEvent.ACTION_MOVE, 520, 560);
+            pen(view, MotionEvent.ACTION_MOVE, 560, 540);
+            view.draw(frame);
+            check(bitmap.getPixel(160, 60) == view.color, "live smooth path must reach the latest sample");
+            check(view.ink.strokes.isEmpty(), "live path must stay outside the committed ink");
+            pen(view, MotionEvent.ACTION_CANCEL, 560, 540);
+            view.draw(frame);
+            check(bitmap.getPixel(160, 60) != view.color, "cancel must remove the live path");
+        } finally {
+            view.width = originalWidth;
+            bitmap.recycle();
+        }
+    }
 
     private void beginPinch(CanvasView view, double startScale) {
         view.ink.view.scale = startScale;
@@ -74,6 +101,7 @@ public final class CanvasTestRunner extends Instrumentation {
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
             root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);
             Ink d=v.ink;time=SystemClock.uptimeMillis();
+            checkLiveTip(v);
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");
             time+=1000;double x=d.view.x;event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_DOWN,400,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,450,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,450,700);check(d.strokes.size()==1&&d.view.x<x,"finger must pan without ink");

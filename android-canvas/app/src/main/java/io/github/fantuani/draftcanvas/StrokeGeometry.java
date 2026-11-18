@@ -5,9 +5,11 @@ import java.util.Arrays;
 /** Spatial smoothing only: no event buffering or delayed stroke finalization. */
 final class StrokeGeometry {
     private StrokeGeometry() {}
+    static float anchorSpacing(float width) { return Math.max(.65f, width * .25f); }
+
     static float[] smooth(float[] input,float width) {
         if(input.length<=3)return input;
-        float spacing=Math.max(.65f,width*.25f);
+        float spacing=anchorSpacing(width);
         Floats anchors=new Floats(input.length);anchors.add(input[0],input[1],input[2]);
         // Reject subpixel direction noise before calculating the pressure outline normals.
         for(int i=3;i<input.length-3;i+=3){
