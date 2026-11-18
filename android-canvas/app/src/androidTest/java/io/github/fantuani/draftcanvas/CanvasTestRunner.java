@@ -98,10 +98,10 @@ public final class CanvasTestRunner extends Instrumentation {
             checkFastPinch(v, .92, 104, 108, 112, 122);
             checkFastPinch(v, 1.10, 97, 94, 90, 82);
             checkFastPinch(v, 1, 104, 112);
-            beginPinch(v, .90);
-            for (int radius = 101; radius <= 105; radius++) movePinch(v, radius);
-            check(d.view.scale == 1, "a moderate pinch must snap within six percentage points");
-            endPinch(v, 105);
+            beginPinch(v, .885);
+            for (int sample = 1; sample <= 4; sample++) movePinch(v, 100 + sample * 1.375f);
+            check(d.view.scale == 1, "a moderate pinch must snap within seven percentage points");
+            endPinch(v, 105.5f);
             checkPinchSnap(v, .92, 108, 112, 122, false);
             checkPinchSnap(v, 1.10, 94, 90, 82, false);
             checkPinchSnap(v, .92, 107, 108, 111, true);

@@ -17,9 +17,9 @@ public final class Viewport {
     }
 
     static final class Pinch {
-        private static final double SNAP_RANGE = .06;
+        private static final double SNAP_RANGE = .07;
         private static final double RELEASE_RANGE = .08;
-        private static final double SNAP_SPEED = .80;
+        private static final double SNAP_SPEED = .90;
         private static final double RELEASE_SPEED = .95;
         private static final double FAST_SAMPLE_SPEED = 1.4;
         private static final double SPEED_SMOOTHING_SECONDS = .045;
