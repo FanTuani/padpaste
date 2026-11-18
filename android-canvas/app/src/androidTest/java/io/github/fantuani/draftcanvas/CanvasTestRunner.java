@@ -22,7 +22,7 @@ public final class CanvasTestRunner extends Instrumentation {
             android.graphics.Canvas c=target.node.beginRecording(v.getWidth(),v.getHeight());v.draw(c);target.node.endRecording();return target.copy();
         }
     }
-    @Override public void onStart(){if(options!=null&&"true".equals(options.getString("asyncTest"))){AsyncRasterCheck.run(this);return;}if(perf){CanvasPerfRunner.run(this,options);return;}Bundle result=new Bundle();try{
+    @Override public void onStart(){if(options!=null&&options.getString("draftTest")!=null){DraftPersistenceCheck.run(this,options.getString("draftTest"));return;}if(options!=null&&"true".equals(options.getString("asyncTest"))){AsyncRasterCheck.run(this);return;}if(perf){CanvasPerfRunner.run(this,options);return;}Bundle result=new Bundle();try{
         runOnMainSync(()->{
             CanvasView v=new CanvasView(getTargetContext(),new Ink());
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));

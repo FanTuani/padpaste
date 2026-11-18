@@ -74,6 +74,11 @@ public final class CanvasView extends View {
         finishPen();
     }
 
+    void settleForSave() {
+        if (selectionHeld || dragging) cancelPen();
+        else finishContactForMenu();
+    }
+
     void beginSelectionHold() {
         int pointer = penId;
         if (pointer != -1) finishPen();

@@ -2,7 +2,7 @@ package io.github.fantuani.draftcanvas;
 
 import java.util.*;
 
-/** Session-only immutable vector strokes. History shares point arrays, never pixel bitmaps. */
+/** Immutable vector strokes. History shares point arrays, never pixel bitmaps. */
 public final class Ink {
     public static final class Stroke {
         public final long id;public final int color;public final float width;
@@ -61,6 +61,7 @@ public final class Ink {
     long revision;
     private long nextId=1;
     public long nextId(){return nextId++;}
+    boolean hasOpenEdit(){return transaction!=null;}
     public void begin(){if(transaction==null)transaction=new ArrayList<>(strokes);}
     public void commit(){if(transaction!=null&&!transaction.equals(strokes)){undo.addLast(transaction);while(undo.size()>100)undo.removeFirst();redo.clear();revision++;}transaction=null;}
     public void cancel(){if(transaction!=null){strokes.clear();strokes.addAll(transaction);revision++;transaction=null;}}

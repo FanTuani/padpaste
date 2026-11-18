@@ -10,6 +10,7 @@ import java.util.*;
 public final class MainActivity extends Activity {
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70;
     CanvasView canvas;
+    private DraftStore draftStore;
     private FanMenu menu;
     private TextView zoom;
     private double shownScale = Double.NaN;
@@ -28,15 +29,17 @@ public final class MainActivity extends Activity {
                     View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        Object retained = getLastNonConfigurationInstance();
-        build(retained instanceof Ink ? (Ink) retained : new Ink());
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0xFFFAFAF7));
+        draftStore = DraftStore.get(this);
+        draftStore.open(ink -> {
+            if (!isDestroyed() && !isFinishing()) build(ink);
+        });
     }
-
-    @Override public Object onRetainNonConfigurationInstance() { return canvas.ink; }
 
     private void build(Ink ink) {
         FrameLayout root = new FrameLayout(this);
         root.setFitsSystemWindows(true);
+        root.setMotionEventSplittingEnabled(false);
         root.setBackgroundColor(0xFFFAFAF7);
         canvas = new CanvasView(this, ink);
         root.addView(canvas, new FrameLayout.LayoutParams(-1, -1));
@@ -47,7 +50,10 @@ public final class MainActivity extends Activity {
         label.setMarginStart(dp(16));
         label.bottomMargin = dp(14);
         root.addView(zoom, label);
-        canvas.changed = this::updateZoom;
+        canvas.changed = () -> {
+            updateZoom();
+            draftStore.observe();
+        };
         updateZoom();
         menu = new FanMenu(this, new FanMenu.Actions() {
             @Override public void color(int color) { canvas.setPenColor(color); }
@@ -113,13 +119,9 @@ public final class MainActivity extends Activity {
                 showWidths();
                 break;
             case FanMenu.CLEAR:
-                if (ink.strokes.isEmpty()) break;
-                new AlertDialog.Builder(this).setTitle("清空草稿？")
-                        .setNegativeButton("取消", null)
-                        .setPositiveButton("清空", (dialog, which) -> {
-                            ink.clear();
-                            canvas.refresh();
-                        }).show();
+                ink.clear();
+                canvas.refresh();
+                draftStore.flush();
                 break;
             case FanMenu.OVERVIEW:
                 canvas.overview();
@@ -198,8 +200,15 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        if (canvas != null) canvas.settleForSave();
         resetPenButtons();
+        draftStore.flush();
         super.onPause();
+    }
+
+    @Override protected void onStop() {
+        super.onStop();
+        draftStore.awaitWrites(450);
     }
 
     @Override public void onWindowFocusChanged(boolean focused) {
@@ -208,7 +217,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public boolean dispatchKeyShortcutEvent(KeyEvent event) {
-        if (event.isCtrlPressed() && event.getKeyCode() == KeyEvent.KEYCODE_Z
+        if (canvas != null && event.isCtrlPressed() && event.getKeyCode() == KeyEvent.KEYCODE_Z
                 && event.getAction() == KeyEvent.ACTION_DOWN) {
             if (event.isShiftPressed()) {
                 canvas.ink.redo();
@@ -220,7 +229,8 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (menu.isOpen()) menu.dismiss(true);
+        if (menu == null) super.onBackPressed();
+        else if (menu.isOpen()) menu.dismiss(true);
         else if (tapSelection) finishSelection(true);
         else if (!canvas.ink.selected.isEmpty()) canvas.clearSelection();
         else super.onBackPressed();

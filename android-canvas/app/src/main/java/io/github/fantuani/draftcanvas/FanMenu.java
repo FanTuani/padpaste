@@ -11,10 +11,13 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.content.res.ColorStateList;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.PathInterpolator;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 final class FanMenu extends ViewGroup {
     static final int SIZE = 1, CLEAR = 2, COPY = 3, PASTE = 4, DELETE = 5, CANCEL = 6, SELECT = 7, OVERVIEW = 8;
@@ -32,6 +35,9 @@ final class FanMenu extends ViewGroup {
     private final Actions actions;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF arc = new RectF();
+    private final RectF confirmationBounds = new RectF();
+    private LinearLayout confirmation;
+    private float morph, sourceX, sourceY, confirmX, confirmY;
     private ValueAnimator animation;
     private boolean selection, shown, closing;
     private float requestedX, requestedY, centerX, centerY;
@@ -47,7 +53,7 @@ final class FanMenu extends ViewGroup {
 
     boolean isOpen() { return shown && !closing; }
     boolean hasToolsAt(float x, float y) {
-        return isOpen() && !selection && requestedX == x && requestedY == y;
+        return isOpen() && !selection && confirmation == null && requestedX == x && requestedY == y;
     }
 
     void showTools(float x, float y, int activeColor, boolean hasInk) {
@@ -75,6 +81,8 @@ final class FanMenu extends ViewGroup {
     private void prepare(float x, float y, boolean selecting) {
         if (animation != null) animation.cancel();
         removeAllViews();
+        confirmation = null;
+        morph = 0;
         selection = selecting;
         requestedX = x;
         requestedY = y;
@@ -97,10 +105,78 @@ final class FanMenu extends ViewGroup {
         Item tile = new Item(label, id, 0);
         tile.setEnabled(enabled);
         tile.setOnClickListener(view -> {
+            if (id == CLEAR) {
+                showClearConfirmation(tile);
+                return;
+            }
             dismiss(true);
             actions.command(id);
         });
         addView(tile);
+    }
+
+    private void showClearConfirmation(Item source) {
+        if (confirmation != null || closing) return;
+        if (animation != null) animation.cancel();
+        sourceX = source.getX() + source.getWidth() / 2f;
+        sourceY = source.getY() + source.getHeight() / 2f;
+
+        confirmation = new LinearLayout(getContext());
+        confirmation.setOrientation(LinearLayout.VERTICAL);
+        confirmation.setGravity(Gravity.CENTER);
+        confirmation.setAlpha(0);
+        confirmation.setPadding(Math.round(dp(14)), 0, Math.round(dp(14)), 0);
+        TextView title = new TextView(getContext());
+        title.setText("清空草稿？");
+        title.setTextColor(INK);
+        title.setTextSize(18);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        title.setGravity(Gravity.CENTER);
+        confirmation.addView(title, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        LinearLayout buttons = new LinearLayout(getContext());
+        buttons.setGravity(Gravity.CENTER);
+        confirmation.addView(buttons, new LinearLayout.LayoutParams(-1, Math.round(dp(52))));
+        buttons.addView(confirmationButton("取消", INK, () -> dismiss(true)),
+                new LinearLayout.LayoutParams(0, -1, 1));
+        buttons.addView(confirmationButton("清空", RED, () -> {
+            dismiss(true);
+            actions.command(CLEAR);
+        }), new LinearLayout.LayoutParams(0, -1, 1));
+        addView(confirmation);
+        for (int i = 0; i < getChildCount() - 1; i++) {
+            View item = getChildAt(i);
+            item.setEnabled(false);
+            item.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+        }
+        float openingProgress = progress;
+        animation = ValueAnimator.ofFloat(0f, 1f);
+        animation.setDuration(230);
+        animation.setInterpolator(OPEN);
+        animation.addUpdateListener(value -> {
+            morph = (float) value.getAnimatedValue();
+            progress = blend(openingProgress, 1f, morph);
+            placeItems();
+            placeConfirmation();
+            invalidate();
+        });
+        animation.start();
+    }
+
+    private TextView confirmationButton(String label, int color, Runnable action) {
+        TextView button = new TextView(getContext());
+        button.setText(label);
+        button.setTextColor(color);
+        button.setTextSize(15);
+        button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        button.setGravity(Gravity.CENTER);
+        button.setFocusable(true);
+        GradientDrawable mask = new GradientDrawable();
+        mask.setCornerRadius(dp(12));
+        mask.setColor(0xFFFFFFFF);
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x21167B70), null, mask));
+        button.setOnClickListener(view -> action.run());
+        return button;
     }
 
     private void open() {
@@ -132,6 +208,7 @@ final class FanMenu extends ViewGroup {
         animation.addUpdateListener(value -> {
             progress = (float) value.getAnimatedValue();
             placeItems();
+            placeConfirmation();
             invalidate();
         });
         if (hideAtEnd) {
@@ -150,7 +227,11 @@ final class FanMenu extends ViewGroup {
         setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(h));
         unit = Math.min(dp(1), Math.min(getMeasuredWidth(), getMeasuredHeight()) / 235f);
         int target = MeasureSpec.makeMeasureSpec(Math.round(43 * unit), MeasureSpec.EXACTLY);
-        for (int i = 0; i < getChildCount(); i++) getChildAt(i).measure(target, target);
+        for (int i = 0; i < itemCount(); i++) getChildAt(i).measure(target, target);
+        if (confirmation != null) {
+            confirmation.measure(MeasureSpec.makeMeasureSpec(Math.round(218 * unit), MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(Math.round(108 * unit), MeasureSpec.EXACTLY));
+        }
     }
 
     @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
@@ -177,22 +258,48 @@ final class FanMenu extends ViewGroup {
             child.layout(0, 0, child.getMeasuredWidth(), child.getMeasuredHeight());
         }
         placeItems();
+        placeConfirmation();
+    }
+
+    private int itemCount() { return getChildCount() - (confirmation == null ? 0 : 1); }
+
+    private float blend(float start, float end, float amount) { return start + (end - start) * amount; }
+
+    private void placeConfirmation() {
+        if (confirmation == null || confirmation.getWidth() == 0) return;
+        float w = confirmation.getWidth(), h = confirmation.getHeight();
+        confirmX = Math.max(w / 2 + 8 * unit, Math.min(getWidth() - w / 2 - 8 * unit, centerX));
+        confirmY = Math.max(h / 2 + 8 * unit, Math.min(getHeight() - h / 2 - 8 * unit, centerY));
+        float x = blend(sourceX, confirmX, morph), y = blend(sourceY, confirmY, morph);
+        float fraction = .9f + .1f * progress;
+        float halfWidth = blend(22 * unit, w / 2f, morph) * fraction;
+        float halfHeight = blend(22 * unit, h / 2f, morph) * fraction;
+        confirmationBounds.set(x - halfWidth, y - halfHeight, x + halfWidth, y + halfHeight);
+        confirmation.setTranslationX(x - w / 2);
+        confirmation.setTranslationY(y - h / 2);
+        confirmation.setScaleX(fraction * blend(.72f, 1, morph));
+        confirmation.setScaleY(fraction * blend(.72f, 1, morph));
+        confirmation.setAlpha(Math.max(0, (morph - .42f) / .58f) * progress);
     }
 
     private void placeItems() {
         if (radius == 0f) return;
         float[] angles = selection ? SELECTION : TOOLS;
-        for (int i = 0; i < getChildCount(); i++) {
+        for (int i = 0; i < itemCount(); i++) {
             View child = getChildAt(i);
             float stagger = i * .018f;
             float amount = Math.max(0f, Math.min(1f, (progress - stagger) / (1f - stagger)));
             float distance = radius * (.62f + .38f * amount);
             double angle = Math.toRadians(angles[i] - (1f - amount) * 10f);
-            child.setTranslationX(centerX + distance * (float) Math.cos(angle) - child.getWidth() / 2f);
-            child.setTranslationY(centerY + distance * (float) Math.sin(angle) - child.getHeight() / 2f);
-            child.setAlpha(Math.min(1f, amount * 1.8f) * (child.isEnabled() ? 1f : .36f));
-            child.setScaleX(.76f + .24f * amount);
-            child.setScaleY(.76f + .24f * amount);
+            float x = centerX + distance * (float) Math.cos(angle);
+            float y = centerY + distance * (float) Math.sin(angle);
+            child.setTranslationX(blend(x, sourceX, morph) - child.getWidth() / 2f);
+            child.setTranslationY(blend(y, sourceY, morph) - child.getHeight() / 2f);
+            float enabledAlpha = child.isEnabled() || confirmation != null ? 1f : .36f;
+            child.setAlpha(Math.min(1f, amount * 1.8f) * enabledAlpha * Math.max(0, 1 - morph * 1.65f));
+            float scale = (.76f + .24f * amount) * (1 - .34f * morph);
+            child.setScaleX(scale);
+            child.setScaleY(scale);
         }
     }
 
@@ -210,6 +317,19 @@ final class FanMenu extends ViewGroup {
             band(canvas, 29, 37);
         }
         canvas.restore();
+        if (confirmation != null && morph > 0) {
+            float corner = blend(22, 18, morph) * unit;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xFF243137);
+            paint.setAlpha(Math.round(26 * progress * morph));
+            canvas.save();
+            canvas.translate(0, 2 * unit);
+            canvas.drawRoundRect(confirmationBounds, corner, corner, paint);
+            canvas.restore();
+            paint.setColor(0xFFFFFEFA);
+            paint.setAlpha(Math.round(255 * progress * Math.min(1, morph * 2)));
+            canvas.drawRoundRect(confirmationBounds, corner, corner, paint);
+        }
     }
 
     private void band(Canvas canvas, float start, float sweep) {
@@ -217,32 +337,41 @@ final class FanMenu extends ViewGroup {
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeWidth(45f * unit);
         paint.setColor(0x22243137);
-        paint.setAlpha(Math.round(27f * progress));
+        paint.setAlpha(Math.round(27f * progress * (1 - morph)));
         canvas.save();
         canvas.translate(0, 2f * unit);
         canvas.drawArc(arc, start, sweep, false, paint);
         canvas.restore();
         paint.setStrokeWidth(44f * unit);
         paint.setColor(0xFFFFFEFA);
-        paint.setAlpha(Math.round(250f * progress));
+        paint.setAlpha(Math.round(250f * progress * (1 - morph)));
         canvas.drawArc(arc, start, sweep, false, paint);
     }
 
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
-        if (closing) return false;
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            if (closing) return false;
             float x = event.getX(), y = event.getY();
-            for (int i = 0; i < getChildCount(); i++) {
-                Item child = (Item) getChildAt(i);
-                if (child.getAlpha() > .08f && child.contains(x - child.getX(), y - child.getY())) {
-                    if (!child.isEnabled()) return true;
-                    return super.dispatchTouchEvent(event);
+            if (confirmation != null) {
+                if (confirmationBounds.contains(x, y)) {
+                    if (morph >= .85f) super.dispatchTouchEvent(event);
+                    return true;
+                }
+            } else {
+                for (int i = 0; i < itemCount(); i++) {
+                    Item child = (Item) getChildAt(i);
+                    if (child.getAlpha() > .08f && child.contains(x - child.getX(), y - child.getY())) {
+                        if (child.isEnabled()) super.dispatchTouchEvent(event);
+                        return true;
+                    }
                 }
             }
             dismiss(true);
-            return event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER;
+            return true;
         }
-        return super.dispatchTouchEvent(event);
+        super.dispatchTouchEvent(event);
+        // The entire contact belongs to the menu once it took DOWN.
+        return true;
     }
 
     private final class Item extends View {
