@@ -9,7 +9,6 @@ import java.util.concurrent.*;
 /** Offscreen ink tiles live in canvas coordinates and are shared by translation frames. */
 final class AsyncInkTiles {
     private static final int SIZE = 256;
-    static final int LOADING_PAPER = 0xFFE6E8E6;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor(task ->
             new Thread(() -> {
@@ -19,7 +18,6 @@ final class AsyncInkTiles {
     private final Runnable invalidate;
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint overlayPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint surfacePaint = new Paint();
     private final RectF destination = new RectF();
     private final Map<Ink.Stroke, Path> paths = new LinkedHashMap<Ink.Stroke, Path>(1024, .75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<Ink.Stroke, Path> entry) {
@@ -296,11 +294,7 @@ final class AsyncInkTiles {
         canvas.clipRect(left, top, right, bottom);
         if (tile.sequence < 0) {
             if (containsInk(tile)) {
-                if (containsOlderInk(tile)) {
-                    surfacePaint.setColor(LOADING_PAPER);
-                    canvas.drawRect(left, top, right, bottom, surfacePaint);
-                    drawFallback(canvas, tile);
-                }
+                drawFallback(canvas, tile);
             } else {
                 // Empty space never needs a bitmap or a trip through the worker.
                 tile.sequence = sequence;
@@ -361,22 +355,6 @@ final class AsyncInkTiles {
     private boolean containsInk(Tile tile) {
         for (Ink.Stroke stroke : document.strokes) {
             if (stroke.intersects(tile.left, tile.top, tile.right, tile.bottom)) return true;
-        }
-        return false;
-    }
-
-    private boolean containsOlderInk(Tile tile) {
-        if (ops.isEmpty()) return true;
-        for (Ink.Stroke stroke : document.strokes) {
-            if (!stroke.intersects(tile.left, tile.top, tile.right, tile.bottom)) continue;
-            boolean alreadyDrawnByPreview = false;
-            for (Op op : ops) {
-                if (op.stroke == stroke) {
-                    alreadyDrawnByPreview = true;
-                    break;
-                }
-            }
-            if (!alreadyDrawnByPreview) return true;
         }
         return false;
     }

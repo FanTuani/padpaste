@@ -69,14 +69,13 @@ final class AsyncRasterCheck {
                 record(view, target);
             });
             image = copy(runner, target);
-            check(image.getPixel(1440,870) == AsyncInkTiles.LOADING_PAPER, "unloaded tile was not marked gray");
-            check(image.getPixel(12,12) != AsyncInkTiles.LOADING_PAPER, "known blank area looked unloaded");
+            check(image.getPixel(1448,878) == 0xfffafaf7, "unloaded region did not retain the paper color");
             image.recycle();
             waitReady(runner, view, target);
             image = copy(runner, target);
-            check(image.getPixel(1440,870) == 0xff3169ca, "gray area did not resolve to the loaded ink");
+            check(image.getPixel(1440,870) == 0xff3169ca, "unloaded region did not resolve to the rendered ink");
             image.recycle();
-            runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, gray zoom placeholders\n");runner.finish(Activity.RESULT_OK,result);
+            runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load\n");runner.finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}
         finally{if(hardware!=null){GpuTarget target=hardware;runner.runOnMainSync(target::close);}if(holder.get()!=null)runner.runOnMainSync(holder.get()::closeRaster);}
     }
