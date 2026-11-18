@@ -1,6 +1,7 @@
 package io.github.fantuani.draftcanvas;
 
 import android.app.*;
+import android.content.SharedPreferences;
 import android.os.*;
 import android.graphics.*;
 import android.view.*;
@@ -11,6 +12,7 @@ public final class MainActivity extends Activity {
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70;
     CanvasView canvas;
     private DraftStore draftStore;
+    private SharedPreferences toolSizes;
     private FanMenu menu;
     private TextView zoom;
     private double shownScale = Double.NaN;
@@ -31,6 +33,7 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0xFFFAFAF7));
         draftStore = DraftStore.get(this);
+        toolSizes = getSharedPreferences("tool_sizes", MODE_PRIVATE);
         draftStore.open(ink -> {
             if (!isDestroyed() && !isFinishing()) build(ink);
         });
@@ -42,13 +45,25 @@ public final class MainActivity extends Activity {
         root.setMotionEventSplittingEnabled(false);
         root.setBackgroundColor(0xFFFAFAF7);
         canvas = new CanvasView(this, ink);
+        float density = getResources().getDisplayMetrics().density;
+        canvas.width = toolSizes.getFloat("pen_width_dp", 2.3f) * density;
+        canvas.setEraserSize(toolSizes.getFloat("eraser_size_dp", 24f) * density);
+        canvas.eraserSensitivity = toolSizes.getFloat("eraser_sensitivity", 2f);
         root.addView(canvas, new FrameLayout.LayoutParams(-1, -1));
         zoom = new TextView(this);
         zoom.setTextColor(0xFF7F8C8C);
         zoom.setTextSize(13);
+        zoom.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        zoom.setMinWidth(dp(60));
+        zoom.setMinHeight(dp(48));
+        zoom.setOnClickListener(view -> {
+            if (ink.view.scale == 1) return;
+            ink.view.scale = 1;
+            canvas.refresh();
+        });
         FrameLayout.LayoutParams label = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
         label.setMarginStart(dp(16));
-        label.bottomMargin = dp(14);
+        label.bottomMargin = dp(1);
         root.addView(zoom, label);
         canvas.changed = () -> {
             updateZoom();
@@ -148,7 +163,9 @@ public final class MainActivity extends Activity {
         double scale = canvas.ink.view.scale;
         if (scale == shownScale) return;
         shownScale = scale;
-        zoom.setText(String.format(Locale.ROOT, scale < .1 ? "%.2f%%" : "%.0f%%", scale * 100));
+        String percent = String.format(Locale.ROOT, scale < .1 ? "%.2f%%" : "%.0f%%", scale * 100);
+        zoom.setText(percent);
+        zoom.setContentDescription("缩放 " + percent + "，轻点恢复到 100%");
     }
 
     private TextView action(String title, Runnable clicked) {
@@ -244,9 +261,9 @@ public final class MainActivity extends Activity {
             p.setStyle(Paint.Style.FILL);p.setColor(0x10167B70);c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);p.setStyle(Paint.Style.STROKE);p.setColor(TEAL);p.setStrokeWidth(dp(1));c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);
         }};
         panel.addView(preview,new LinearLayout.LayoutParams(-1,dp(110)));
-        panel.addView(sizeControl("笔粗细",.3f,10,.1f,canvas.width/density,value->{canvas.width=value*density;preview.invalidate();}));
-        panel.addView(sizeControl("橡皮大小",6,96,1,canvas.eraserSize/density,value->{canvas.setEraserSize(value*density);preview.invalidate();}));
-        panel.addView(sizeControl("橡皮压感灵敏度",.5f,4,.1f,canvas.eraserSensitivity,value->{canvas.eraserSensitivity=value;}));
+        panel.addView(sizeControl("笔粗细",.3f,10,.1f,canvas.width/density,value->{canvas.width=value*density;toolSizes.edit().putFloat("pen_width_dp",value).apply();preview.invalidate();}));
+        panel.addView(sizeControl("橡皮大小",6,96,1,canvas.eraserSize/density,value->{canvas.setEraserSize(value*density);toolSizes.edit().putFloat("eraser_size_dp",value).apply();preview.invalidate();}));
+        panel.addView(sizeControl("橡皮压感灵敏度",.5f,4,.1f,canvas.eraserSensitivity,value->{canvas.eraserSensitivity=value;toolSizes.edit().putFloat("eraser_sensitivity",value).apply();}));
         new AlertDialog.Builder(this).setTitle("笔与橡皮").setView(panel).setPositiveButton("完成",null).show();
     }
     private View sizeControl(String title,float min,float max,float step,float current,java.util.function.Consumer<Float> change){
