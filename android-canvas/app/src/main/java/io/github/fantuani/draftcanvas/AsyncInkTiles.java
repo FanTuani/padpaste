@@ -313,14 +313,13 @@ final class AsyncInkTiles {
         if (previous == null || !ops.isEmpty()) return;
         double ratio = camera.scale / previous.scale;
         if (ratio < .5 || ratio > 2) return;
-        for (Tile tile : previous.tiles.values()) {
-            if (tile.bitmap == null || tile.right <= region.left || tile.left >= region.right
-                    || tile.bottom <= region.top || tile.top >= region.bottom) continue;
-            canvas.save();
-            canvas.clipRect(camera.sx(tile.left), camera.sy(tile.top), camera.sx(tile.right), camera.sy(tile.bottom));
-            // Only use the old ink to fill gaps. It is never painted over a fresh tile.
-            drawBitmap(canvas, tile);
-            canvas.restore();
+        int left = previous.column(region.left), right = previous.column(region.right);
+        int top = previous.row(region.top), bottom = previous.row(region.bottom);
+        for (int row = top; row <= bottom; row++) {
+            for (int col = left; col <= right; col++) {
+                Tile tile = previous.get(col, row);
+                if (tile != null) drawBitmap(canvas, tile);
+            }
         }
     }
 
@@ -415,9 +414,8 @@ final class AsyncInkTiles {
             }
         }
         if (visible != null) return visible;
-        if (target.bitmapCount >= bitmapLimit(target)) return null;
-
-        if (!target.haloIndexed) {
+        boolean hasRoom = target.bitmapCount < bitmapLimit(target);
+        if (hasRoom && !target.haloIndexed) {
             for (int row = target.nearby.top; row <= target.nearby.bottom; row++) {
                 for (int col = target.nearby.left; col <= target.nearby.right; col++) {
                     if (target.get(col, row) != null) continue;
@@ -430,7 +428,7 @@ final class AsyncInkTiles {
         Tile nearest = null;
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (Tile tile : target.tiles.values()) {
-            if (!tile.needsRender()) continue;
+            if (!tile.needsRender() || (!hasRoom && tile.bitmap == null)) continue;
             double distance = distance(tile);
             if (distance < nearestDistance) {
                 nearest = tile;
