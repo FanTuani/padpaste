@@ -15,7 +15,7 @@ public final class CanvasTestRunner extends Instrumentation {
     private void event(CanvasView view,int tool,int action,float... xy){
         int n=xy.length/2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[n];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[n];
         for(int i=0;i<n;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=tool;coords[i]=new MotionEvent.PointerCoords();coords[i].x=xy[i*2];coords[i].y=xy[i*2+1];coords[i].pressure=pressure;coords[i].size=.1f;}
-        MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
+        MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT||action==MotionEvent.ACTION_HOVER_MOVE)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
 
@@ -161,31 +161,62 @@ public final class CanvasTestRunner extends Instrumentation {
             event(v, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.ACTION_HOVER_ENTER, 475, 675);
             event(v, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.ACTION_HOVER_EXIT, 470, 670);
             check(v.menuAnchor().x == 475 && v.menuAnchor().y == 675, "menu lost the last hover position");
-            v.beginSelectionHold();
-            pen(v, MotionEvent.ACTION_DOWN, 480, 680);
-            pen(v, MotionEvent.ACTION_MOVE, 620, 720);
-            android.graphics.PointF release = v.endSelectionHold(false);
-            check(d.selected.size() == 1 && v.mode == CanvasView.PEN, "button release must finish the rectangle");
-            check(release.x == 620 && release.y == 720, "selection menu must anchor at the rectangle endpoint");
-            pen(v, MotionEvent.ACTION_UP, 620, 720);
-            check(d.strokes.size() == 1, "lifting after selection wrote an extra stroke");
-            v.beginSelectionHold();
-            check(v.endSelectionHold(false) == null, "a hold with no marquee must not open selection actions");
-            v.beginSelectionHold();
+            int[] selectionTaps = {0};
+            v.setOnClickListener(view -> selectionTaps[0]++);
+            time += 1000;
+            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 520, 700);
+            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_UP, 520, 700);
+            check(selectionTaps[0] == 0, "finger tap must not show a menu");
+
+            v.armSelection();
+            event(v, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.ACTION_HOVER_ENTER, 470, 665);
+            event(v, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.ACTION_HOVER_MOVE, 620, 730);
+            check(v.selectionArmed() && !v.hasSelectionBox() && d.selected.isEmpty(),
+                    "hover must leave selection armed for the next contact");
             pen(v, MotionEvent.ACTION_DOWN, 520, 700);
             pen(v, MotionEvent.ACTION_UP, 521, 700);
-            check(v.endSelectionHold(false) == null, "a pen tap must not open selection actions");
-            v.beginSelectionHold();
-            pen(v, MotionEvent.ACTION_DOWN, 800, 800);
-            pen(v, MotionEvent.ACTION_MOVE, 950, 930);
-            pen(v, MotionEvent.ACTION_UP, 950, 930);
-            check(v.endSelectionHold(false) != null && d.selected.isEmpty(),
-                    "a finished empty rectangle must still allow paste");
+            check(v.selectionArmed() && selectionTaps[0] == 0, "a tap must not create a rectangle");
+
+            pen(v, MotionEvent.ACTION_DOWN, 480, 680);
+            pen(v, MotionEvent.ACTION_MOVE, 620, 720);
+            pen(v, MotionEvent.ACTION_UP, 620, 720);
+            check(v.hasSelectionBox() && !v.selectionArmed() && d.selected.size() == 1
+                    && d.strokes.size() == 1 && selectionTaps[0] == 0,
+                    "pen-up must preserve the selection without opening a menu");
+            pen(v, MotionEvent.ACTION_DOWN, 610, 715);
+            pen(v, MotionEvent.ACTION_UP, 610, 715);
+            check(selectionTaps[0] == 1 && v.selectionMenuAnchor().x == 610,
+                    "a pen tap in the drawn box must open its menu at the tap");
+
+            event(v, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.ACTION_HOVER_EXIT, 610, 715);
+            time += 1000;
+            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 610, 715);
+            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_UP, 610, 715);
+            check(selectionTaps[0] == 1 && v.hasSelectionBox(), "finger tap must keep the box without opening its menu");
+            pen(v, MotionEvent.ACTION_DOWN, 610, 715);
+            pen(v, MotionEvent.ACTION_MOVE, 650, 745);
+            pen(v, MotionEvent.ACTION_UP, 650, 745);
+            check(d.strokes.get(0).x == 540 && d.strokes.get(0).y == 730 && selectionTaps[0] == 1,
+                    "dragging must move selected ink without invoking the menu");
+            pen(v, MotionEvent.ACTION_DOWN, 650, 745);
+            pen(v, MotionEvent.ACTION_UP, 650, 745);
+            check(selectionTaps[0] == 2, "the box must be tappable at its moved location");
+
+            v.armSelection();
+            pen(v, MotionEvent.ACTION_DOWN, 950, 930);
+            pen(v, MotionEvent.ACTION_MOVE, 800, 800);
+            pen(v, MotionEvent.ACTION_UP, 800, 800);
+            check(v.hasSelectionBox() && d.selected.isEmpty() && selectionTaps[0] == 2,
+                    "an empty box must remain available without auto-opening the menu");
+            pen(v, MotionEvent.ACTION_DOWN, 850, 850);
+            pen(v, MotionEvent.ACTION_UP, 850, 850);
+            check(selectionTaps[0] == 3, "an empty box must be tappable for paste");
+            v.clearSelection();
             v.overview();
-            check(Math.abs(d.view.x - 550) < .1 && Math.abs(d.view.y - 700) < .1,
+            check(Math.abs(d.view.x - 590) < .1 && Math.abs(d.view.y - 730) < .1,
                     "overview must center existing ink");
             v.refresh();
         });
-        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, side-button selection release\n");finish(Activity.RESULT_OK,result);
+        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, armed selection, pen tap and drag, silent finger taps\n");finish(Activity.RESULT_OK,result);
     }catch(Throwable e){result.putString("stream","FAIL: "+e);finish(Activity.RESULT_CANCELED,result);}}
 }

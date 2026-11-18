@@ -11,10 +11,8 @@ public final class CanvasView extends View {
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
-    Runnable marqueeFinished = () -> {};
     private boolean fingerTap;
     private float fingerDownX, fingerDownY;
-    private long fingerDownTime;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final class SectionKey {
         final double a,b;SectionKey(double a,double b){this.a=a;this.b=b;}
@@ -32,10 +30,10 @@ public final class CanvasView extends View {
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
     private long lastPen;
     private boolean temporaryEraser;
-    private boolean selectionHeld, hoverBox, selectionUsedContact, hoverKnown;
+    private boolean selectionContact, hoverKnown;
     private int ignoredPenId = -1;
-    private PointF completedSelection;
-    private float hoverX, hoverY, boxX, boxY, boxEndX, boxEndY;
+    private SelectionBox selectionBox;
+    private float hoverX, hoverY;
     private float lastX,lastY,lastPressure;
     private int lastTool;
     private boolean cursorKnown,erasePoint;private float cursorRadius;
@@ -47,16 +45,34 @@ public final class CanvasView extends View {
     private boolean fingers;private int fingerCount;private float prevX,prevY,prevDistance;
     private double gestureX,gestureY,gestureScale;
     private final Viewport.Pinch pinch = new Viewport.Pinch();
+    private record SelectionBox(double left, double top, double right, double bottom) {
+        static SelectionBox between(double x, double y, double otherX, double otherY) {
+            return new SelectionBox(Math.min(x, otherX), Math.min(y, otherY),
+                    Math.max(x, otherX), Math.max(y, otherY));
+        }
+
+        boolean contains(double x, double y) {
+            return x >= left && x <= right && y >= top && y <= bottom;
+        }
+
+        SelectionBox translated(double x, double y) {
+            return new SelectionBox(left + x, top + y, right + x, bottom + y);
+        }
+    }
+
     public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);eraserSize=dp(24);setBackgroundColor(0xFFFAFAF7);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
     private float dp(float n){return n*getResources().getDisplayMetrics().density;}
     private double wx(float x){return ink.view.worldX(x,getWidth());}private double wy(float y){return ink.view.worldY(y,getHeight());}
-    public void tool(int value){cancelPen();mode=value;if(mode!=SELECT)ink.selected.clear();refreshOverlay();}
+    public void tool(int value){cancelPen();discardSelection();mode=value;refreshOverlay();}
     public int displayMode(){return temporaryEraser?ERASE:mode;}
     public void temporaryEraser(boolean held){
         if(temporaryEraser==held)return;
         int active=penId;float x=lastX,y=lastY,p=lastPressure;int tool=lastTool;
-        if(active!=-1)finishPen();temporaryEraser=held;
-        if(!held)mode=PEN;ink.selected.clear();
+        if (marquee || selectionContact) cancelPen();
+        else if (active != -1) finishPen();
+        temporaryEraser=held;
+        if (!held || selectionArmed()) mode = PEN;
+        discardSelection();
         if(active!=-1)resumePen(active,x,y,p,tool);refreshOverlay();
     }
     PointF menuAnchor() {
@@ -65,75 +81,58 @@ public final class CanvasView extends View {
         return new PointF(getWidth() / 2f, getHeight() / 2f);
     }
 
-    PointF touchAnchor() {
-        if (getWidth() == 0 || getHeight() == 0) return menuAnchor();
-        return new PointF(fingerDownX, fingerDownY);
+    PointF selectionMenuAnchor() {
+        if (selectionBox == null || selectionBox.contains(wx(lastX), wy(lastY))) {
+            return new PointF(lastX, lastY);
+        }
+        return new PointF(screenX((selectionBox.left + selectionBox.right) / 2),
+                screenY((selectionBox.top + selectionBox.bottom) / 2));
     }
 
     void finishContactForMenu() {
         if (penId == -1) return;
         ignoredPenId = penId;
-        finishPen();
+        if (marquee || selectionContact) {
+            cancelPen();
+            postInvalidateOnAnimation();
+        } else finishPen();
     }
 
     void settleForSave() {
-        if (selectionHeld || dragging) cancelPen();
-        else finishContactForMenu();
+        finishContactForMenu();
     }
 
-    void beginSelectionHold() {
-        int pointer = penId;
-        if (pointer != -1) finishPen();
-        ink.selected.clear();
-        completedSelection = null;
-        selectionHeld = true;
-        selectionUsedContact = pointer != -1;
-        mode = SELECT;
-        if (selectionUsedContact) {
-            resumePen(pointer, lastX, lastY, lastPressure, lastTool);
-        } else if (nearPen) {
-            updateHoverBox(hoverX, hoverY);
-        }
-        refreshOverlay();
+    void armSelection() {
+        if (selectionArmed()) return;
+        finishContactForMenu();
+        tool(SELECT);
     }
 
-    PointF endSelectionHold(boolean canceled) {
-        if (!selectionHeld) return null;
-        if (penId != -1) {
-            ignoredPenId = penId;
-            if (canceled) cancelPen();
-            else finishPen();
-        } else if (!canceled && !selectionUsedContact && hoverBox
-                && Math.hypot(boxEndX - boxX, boxEndY - boxY) >= dp(4)) {
-            selectRectangle(wx(boxX), wy(boxY), wx(boxEndX), wy(boxEndY));
-            completedSelection = new PointF(boxEndX, boxEndY);
-        }
-        PointF anchor = canceled ? null : completedSelection;
-        if (anchor == null) ink.selected.clear();
-        completedSelection = null;
-        selectionHeld = hoverBox = selectionUsedContact = false;
-        mode = PEN;
-        refreshOverlay();
-        return anchor;
-    }
+    boolean selectionArmed() { return mode == SELECT; }
 
-    private void selectRectangle(double x1, double y1, double x2, double y2) {
-        ink.select(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
-    }
-
-    private void updateHoverBox(float x, float y) {
-        if (!hoverBox) {
-            boxX = x;
-            boxY = y;
-            hoverBox = true;
-        }
-        boxEndX = x;
-        boxEndY = y;
-    }
+    boolean hasSelectionBox() { return selectionBox != null; }
 
     void clearSelection() {
+        if (marquee || selectionContact) {
+            ignoredPenId = penId;
+            cancelPen();
+        }
+        if (selectionArmed()) mode = PEN;
+        discardSelection();
+        postInvalidateOnAnimation();
+    }
+
+    private void discardSelection() {
+        selectionBox = null;
         ink.selected.clear();
-        refreshOverlay();
+    }
+
+    void pasteSelection() {
+        if (!ink.canPaste()) return;
+        ink.paste(getWidth(), getHeight());
+        double[] bounds = ink.selectionBounds();
+        selectionBox = new SelectionBox(bounds[0], bounds[1], bounds[2], bounds[3]);
+        refresh();
     }
 
     public void setPenColor(int next){
@@ -148,7 +147,12 @@ public final class CanvasView extends View {
     }
     void invalidateErasedArea(float left,float top,float right,float bottom){if(tiles!=null)tiles.invalidate(left-2,top-2,right+2,bottom+2);}
     public void setEraserSize(float size){eraserSize=size;cursorRadius=size/2;postInvalidateOnAnimation();}
-    public void undo(){if(penId!=-1)finishPen();ink.undo();refresh();}
+    public void undo() {
+        clearSelection();
+        if (penId != -1) finishPen();
+        ink.undo();
+        refresh();
+    }
     private void refreshOverlay(){postInvalidateOnAnimation();changed.run();}
     public void refresh(){if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
@@ -167,18 +171,13 @@ public final class CanvasView extends View {
             liveStroke.draw(c, paint, strokeWidth);
             c.restore();
         }
-        double[] bounds=ink.selectionBounds();
-        if(marquee)bounds=new double[]{Math.min(startX,dragX),Math.min(startY,dragY),Math.max(startX,dragX),Math.max(startY,dragY)};
-        else if(bounds!=null){bounds[0]+=dragX;bounds[2]+=dragX;bounds[1]+=dragY;bounds[3]+=dragY;}
-        if (hoverBox) {
-            bounds = new double[]{wx(Math.min(boxX, boxEndX)), wy(Math.min(boxY, boxEndY)),
-                    wx(Math.max(boxX, boxEndX)), wy(Math.max(boxY, boxEndY))};
-        }
+        SelectionBox bounds = marquee ? SelectionBox.between(startX, startY, dragX, dragY) : selectionBox;
+        if (dragging && bounds != null) bounds = bounds.translated(dragX, dragY);
         if(bounds!=null){
-            float x1=screenX(bounds[0]),y1=screenY(bounds[1]),x2=screenX(bounds[2]),y2=screenY(bounds[3]);
+            float x1=screenX(bounds.left),y1=screenY(bounds.top),x2=screenX(bounds.right),y2=screenY(bounds.bottom);
             paint.setStyle(Paint.Style.FILL);paint.setColor(0x11167B70);c.drawRect(x1,y1,x2,y2,paint);
             paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);paint.setStrokeWidth(dp(1.2f));paint.setPathEffect(new DashPathEffect(new float[]{dp(5),dp(4)},0));c.drawRect(x1,y1,x2,y2,paint);paint.setPathEffect(null);
-            if(!marquee&&!hoverBox){paint.setStyle(Paint.Style.FILL);for(float x:new float[]{x1,x2})for(float y:new float[]{y1,y2}){paint.setColor(Color.WHITE);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.FILL);}}
+            if(!marquee){paint.setStyle(Paint.Style.FILL);for(float x:new float[]{x1,x2})for(float y:new float[]{y1,y2}){paint.setColor(Color.WHITE);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.FILL);}}
         }
         if(displayMode()==ERASE&&cursorKnown&&(nearPen||penId!=-1||temporaryEraser)){
             float radius=cursorRadius>0?cursorRadius:eraserSize/2;
@@ -239,16 +238,9 @@ public final class CanvasView extends View {
         penId=e.getPointerId(i);fingers=false;lastPen=e.getEventTime();startX=wx(e.getX(i));startY=wy(e.getY(i));dragX=dragY=0;
         erasing=temporaryEraser||mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER;
         if(erasing){ink.begin();erasePoint=false;erase(startX,startY,e.getPressure(i));return;}
-        if (selectionHeld) {
-            selectionUsedContact = true;
-            completedSelection = null;
-            hoverBox = false;
-        }
-        double[] box = ink.selectionBounds();
-        dragging = !selectionHeld && box != null && startX >= box[0] && startX <= box[2]
-                && startY >= box[1] && startY <= box[3];
-        if (dragging) return;
-        ink.selected.clear();
+        selectionContact = selectionBox != null && selectionBox.contains(startX, startY);
+        if (selectionContact) return;
+        discardSelection();
         if (mode == SELECT) {
             marquee = true;
             dragX = startX;
@@ -271,7 +263,13 @@ public final class CanvasView extends View {
             if(straight)erase(x,y,maxPressure);else {for(int h=0;h<e.getHistorySize();h++)erase(wx(e.getHistoricalX(i,h)),wy(e.getHistoricalY(i,h)),e.getHistoricalPressure(i,h));erase(x,y,e.getPressure(i));}
             cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(e.getPressure(i),eraserSensitivity));
         }
-        else if(dragging){dragX=x-startX;dragY=y-startY;}
+        else if (selectionContact) {
+            double dx = x - startX, dy = y - startY;
+            if (!dragging && Math.hypot(dx, dy) * ink.view.scale < dp(6)) return false;
+            dragging = true;
+            dragX = dx;
+            dragY = dy;
+        }
         else if(marquee){dragX=x;dragY=y;}
         else {
             boolean changed = false;
@@ -299,12 +297,19 @@ public final class CanvasView extends View {
     boolean rasterReady(){return raster!=null&&raster.ready();}
     private void finishPen(){
         boolean erased=erasing,added=false;
-        boolean selectedBox = marquee
-                && (!selectionHeld || Math.hypot(dragX - startX, dragY - startY) * ink.view.scale >= dp(4));
-        if(erasing)ink.commit();else if(dragging)ink.move(dragX,dragY);else if(marquee){
-            if (selectedBox) {
-                selectRectangle(startX, startY, dragX, dragY);
-                if (selectionHeld) completedSelection = new PointF(lastX, lastY);
+        boolean tapSelection = selectionContact && !dragging
+                && selectionBox.contains(wx(lastX), wy(lastY));
+        boolean movedSelection = dragging;
+        if (erasing) ink.commit();
+        else if (dragging) {
+            ink.move(dragX, dragY);
+            selectionBox = selectionBox.translated(dragX, dragY);
+        } else if (marquee) {
+            if (startX != dragX && startY != dragY
+                    && Math.hypot(dragX - startX, dragY - startY) * ink.view.scale >= dp(4)) {
+                selectionBox = SelectionBox.between(startX, startY, dragX, dragY);
+                ink.select(selectionBox.left, selectionBox.top, selectionBox.right, selectionBox.bottom);
+                mode = PEN;
             }
         }
         else if (!liveStroke.isEmpty()) {
@@ -315,26 +320,44 @@ public final class CanvasView extends View {
             added = true;
             invalidateErasedArea(screenX(stroke.left), screenY(stroke.top), screenX(stroke.right), screenY(stroke.bottom));
         }
-        liveStroke.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;if(erased||added){if(raster!=null)raster.noteRevision(ink);postInvalidateOnAnimation();changed.run();}else refresh();
-        if (selectedBox) marqueeFinished.run();
+        resetPenContact();
+        if (erased || added) {
+            if (raster != null) raster.noteRevision(ink);
+            postInvalidateOnAnimation();
+            changed.run();
+        } else if (movedSelection) refresh();
+        else postInvalidateOnAnimation();
+        if (tapSelection) performClick();
     }
-    private void cancelPen(){if(erasing){ink.cancel();if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);}liveStroke.clear();erasePoint=false;penId=-1;dragging=marquee=erasing=false;dragX=dragY=0;}
+
+    private void resetPenContact() {
+        liveStroke.clear();
+        erasePoint = false;
+        penId = -1;
+        selectionContact = dragging = marquee = erasing = false;
+        dragX = dragY = 0;
+    }
+
+    private void cancelPen() {
+        if (erasing) {
+            ink.cancel();
+            if (tiles != null) tiles.invalidateAll();
+            if (raster != null) raster.modelChanged(ink);
+        }
+        resetPenContact();
+    }
+
     @Override public boolean onHoverEvent(MotionEvent e){
         if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){
             nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;lastPen=e.getEventTime();
-            boolean redraw = displayMode() == ERASE;
             if (nearPen) {
                 hoverKnown = true;
                 hoverX = lastX = e.getX();
                 hoverY = lastY = e.getY();
-                if (selectionHeld && !selectionUsedContact && penId == -1) {
-                    redraw |= !hoverBox || boxEndX != hoverX || boxEndY != hoverY;
-                    updateHoverBox(hoverX, hoverY);
-                }
                 cursorKnown = true;
             }
             cursorRadius=eraserSize/2;
-            if (redraw) postInvalidateOnAnimation();
+            if (displayMode() == ERASE) postInvalidateOnAnimation();
             return true;
         }return super.onHoverEvent(e);
     }
@@ -345,7 +368,6 @@ public final class CanvasView extends View {
             fingerTap = e.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER;
             fingerDownX = e.getX(index);
             fingerDownY = e.getY(index);
-            fingerDownTime = e.getEventTime();
         } else if (action == MotionEvent.ACTION_POINTER_DOWN
                 || Math.hypot(e.getX(index) - fingerDownX, e.getY(index) - fingerDownY) > dp(8)) {
             fingerTap = false;
@@ -381,11 +403,9 @@ public final class CanvasView extends View {
         if(action==MotionEvent.ACTION_UP){
             if (fingers) postInvalidateOnAnimation();
             fingers=false;
-            if (fingerTap && !nearPen && e.getEventTime() - fingerDownTime < 250) performClick();
             fingerTap=false;
             return true;
         }
-        if (selectionHeld) return true;
         int count=0;float cx=0,cy=0,distance=0,firstX=0,firstY=0;
         for(int i=0;i<e.getPointerCount();i++){if(action==MotionEvent.ACTION_POINTER_UP&&i==index)continue;if(e.getToolType(i)!=MotionEvent.TOOL_TYPE_FINGER)continue;if(count==0){firstX=e.getX(i);firstY=e.getY(i);}else if(count==1)distance=(float)Math.hypot(e.getX(i)-firstX,e.getY(i)-firstY);cx+=e.getX(i);cy+=e.getY(i);count++;if(count==2)break;}
         if(count==0||((nearPen||e.getEventTime()-lastPen<250)&&count==1)){fingers=false;return true;}cx/=count;cy/=count;
@@ -417,7 +437,7 @@ public final class CanvasView extends View {
         }
         return true;
     }
-    @Override public boolean performClick(){super.performClick();return true;}
+    @Override public boolean performClick(){return hasSelectionBox() && super.performClick();}
 
     void overview() {
         double left = Double.POSITIVE_INFINITY, top = left, right = -left, bottom = -left;

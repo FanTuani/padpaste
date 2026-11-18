@@ -17,7 +17,6 @@ public final class MainActivity extends Activity {
     private TextView zoom;
     private double shownScale = Double.NaN;
     private PenButtons penButtons;
-    private boolean tapSelection;
     private final Handler penHandler = new Handler(Looper.getMainLooper());
     private final Runnable lowerHold = () -> penButtons.hold(SystemClock.uptimeMillis());
     private final Runnable upperHold = () -> penButtons.holdUpper(SystemClock.uptimeMillis());
@@ -75,36 +74,30 @@ public final class MainActivity extends Activity {
             @Override public void command(int id) { menuCommand(id); }
         });
         root.addView(menu, new FrameLayout.LayoutParams(-1, -1));
-        canvas.marqueeFinished = () -> {
-            if (tapSelection) finishSelection(false);
-        };
         canvas.setOnClickListener(view -> {
-            if (tapSelection) finishSelection(true);
-            else showTools(canvas.touchAnchor());
+            PointF anchor = canvas.selectionMenuAnchor();
+            menu.showSelection(anchor.x, anchor.y, !ink.selected.isEmpty(), ink.canPaste());
         });
         penButtons = new PenButtons(new PenButtons.Listener() {
             @Override public void eraser(boolean held) {
-                if (held) {
-                    menu.dismiss(false);
-                    if (tapSelection) finishSelection(true);
-                }
+                if (held) menu.dismiss(false);
                 canvas.temporaryEraser(held);
             }
             @Override public void undo() {
                 menu.dismiss(false);
-                if (tapSelection) finishSelection(true);
                 canvas.undo();
             }
             @Override public void menu() {
-                if (tapSelection) finishSelection(true);
+                if (canvas.selectionArmed()) canvas.clearSelection();
                 showTools(canvas.menuAnchor());
             }
             @Override public void beginSelection() {
                 menu.dismiss(false);
-                if (tapSelection) finishSelection(true);
-                canvas.beginSelectionHold();
+                canvas.armSelection();
             }
-            @Override public void endSelection(boolean canceled) { finishSelection(canceled); }
+            @Override public void endSelection(boolean canceled) {
+                if (canceled && canvas.selectionArmed()) canvas.clearSelection();
+            }
         });
         setContentView(root);
     }
@@ -115,25 +108,17 @@ public final class MainActivity extends Activity {
         menu.showTools(p.x, p.y, canvas.color, !canvas.ink.strokes.isEmpty());
     }
 
-    private void finishSelection(boolean canceled) {
-        tapSelection = false;
-        PointF p = canvas.endSelectionHold(canceled);
-        if (p != null) {
-            menu.showSelection(p.x, p.y, !canvas.ink.selected.isEmpty(), canvas.ink.canPaste());
-        }
-    }
-
     private void menuCommand(int id) {
         Ink ink = canvas.ink;
         switch (id) {
             case FanMenu.SELECT:
-                tapSelection = true;
-                canvas.beginSelectionHold();
+                canvas.armSelection();
                 break;
             case FanMenu.SIZE:
                 showWidths();
                 break;
             case FanMenu.CLEAR:
+                canvas.clearSelection();
                 ink.clear();
                 canvas.refresh();
                 draftStore.flush();
@@ -145,11 +130,11 @@ public final class MainActivity extends Activity {
                 ink.copy();
                 break;
             case FanMenu.PASTE:
-                ink.paste(canvas.getWidth(), canvas.getHeight());
-                canvas.refresh();
+                canvas.pasteSelection();
                 break;
             case FanMenu.DELETE:
                 ink.deleteSelected();
+                canvas.clearSelection();
                 canvas.refresh();
                 break;
             case FanMenu.CANCEL:
@@ -212,7 +197,7 @@ public final class MainActivity extends Activity {
         penHandler.removeCallbacks(lowerHold);
         penHandler.removeCallbacks(upperHold);
         if (penButtons != null) penButtons.reset();
-        if (tapSelection) finishSelection(true);
+        if (canvas != null && canvas.selectionArmed()) canvas.clearSelection();
         if (menu != null) menu.dismiss(false);
     }
 
@@ -237,6 +222,7 @@ public final class MainActivity extends Activity {
         if (canvas != null && event.isCtrlPressed() && event.getKeyCode() == KeyEvent.KEYCODE_Z
                 && event.getAction() == KeyEvent.ACTION_DOWN) {
             if (event.isShiftPressed()) {
+                canvas.clearSelection();
                 canvas.ink.redo();
                 canvas.refresh();
             } else canvas.undo();
@@ -248,8 +234,7 @@ public final class MainActivity extends Activity {
     @Override public void onBackPressed() {
         if (menu == null) super.onBackPressed();
         else if (menu.isOpen()) menu.dismiss(true);
-        else if (tapSelection) finishSelection(true);
-        else if (!canvas.ink.selected.isEmpty()) canvas.clearSelection();
+        else if (canvas.selectionArmed() || canvas.hasSelectionBox()) canvas.clearSelection();
         else super.onBackPressed();
     }
 
