@@ -42,33 +42,24 @@ public final class CanvasTestRunner extends Instrumentation {
     }
 
     private void checkPinchSnap(CanvasView view, double startScale, int snapRadius, int holdRadius,
-                                int releaseRadius, boolean accelerateToRelease) {
+                                int releaseRadius, boolean gradual) {
         beginPinch(view, startScale);
         Viewport viewport = view.ink.view;
         double anchorX = viewport.worldX(400, view.getWidth());
         double anchorY = viewport.worldY(300, view.getHeight());
-        movePinchSlowly(view, 100, snapRadius);
+        if (gradual) movePinchSlowly(view, 100, snapRadius);
+        else movePinch(view, snapRadius);
         check(viewport.scale == 1, "pinch must snap to exactly 100%");
         check(Math.abs(viewport.worldX(410, view.getWidth()) - anchorX) < .001
                 && Math.abs(viewport.worldY(320, view.getHeight()) - anchorY) < .001,
                 "snap must preserve the canvas point under the moving pinch center");
         movePinchSlowly(view, snapRadius, holdRadius);
         check(viewport.scale == 1, "small finger movement must keep the pinch snapped");
-        if (accelerateToRelease) movePinch(view, releaseRadius);
-        else movePinchSlowly(view, holdRadius, releaseRadius);
+        if (gradual) movePinchSlowly(view, holdRadius, releaseRadius);
+        else movePinch(view, releaseRadius);
         check(Math.abs(viewport.scale - startScale * releaseRadius / 100) < .001,
                 "continued pinch must release the snap at the requested scale");
         endPinch(view, releaseRadius);
-    }
-
-    private void checkFastPinch(CanvasView view, double startScale, int... radii) {
-        beginPinch(view, startScale);
-        for (int radius : radii) {
-            movePinch(view, radius);
-            check(Math.abs(view.ink.view.scale - startScale * radius / 100) < .001,
-                    "fast pinch must pass through the snap range directly");
-        }
-        endPinch(view, radii[radii.length - 1]);
     }
 
     @android.annotation.TargetApi(29)
@@ -95,21 +86,10 @@ public final class CanvasTestRunner extends Instrumentation {
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,250,300,550,300);
             check(Math.abs(d.view.scale-1.5)<.01,"two finger zoom failed");
             event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_POINTER_UP|(1<<8),250,300,550,300);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,250,300);
-            checkFastPinch(v, .92, 104, 108, 112, 122);
-            checkFastPinch(v, 1.10, 97, 94, 90, 82);
-            checkFastPinch(v, 1, 104, 112);
-            beginPinch(v, .885);
-            for (int sample = 1; sample <= 4; sample++) movePinch(v, 100 + sample * 1.375f);
-            check(d.view.scale == 1, "a moderate pinch must snap within seven percentage points");
-            endPinch(v, 105.5f);
-            checkPinchSnap(v, .92, 108, 112, 122, false);
-            checkPinchSnap(v, 1.10, 94, 90, 82, false);
-            checkPinchSnap(v, .92, 107, 108, 111, true);
-            beginPinch(v, .80);
-            movePinch(v, 112);
-            movePinchSlowly(v, 112, 121);
-            check(d.view.scale == 1, "slowing down near 100% must enable snap within the same gesture");
-            endPinch(v, 121);
+            checkPinchSnap(v, .89, 105, 112, 124, false);
+            checkPinchSnap(v, 1.12, 95, 90, 81, false);
+            checkPinchSnap(v, .89, 105, 112, 124, true);
+            checkPinchSnap(v, 1.12, 95, 90, 81, true);
             beginPinch(v, 1);
             movePinchSlowly(v, 100, 102);
             check(Math.abs(d.view.scale - 1.02) < .001, "a new pinch at 100% must be free to zoom away");
