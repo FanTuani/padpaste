@@ -75,9 +75,55 @@ final class AsyncRasterCheck {
             image = copy(runner, target);
             check(image.getPixel(1440,870) == 0xff3169ca, "unloaded region did not resolve to the rendered ink");
             image.recycle();
-            runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load\n");runner.finish(Activity.RESULT_OK,result);
+            checkSelectionMove(runner, view, target);
+            runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load, selection release before and after tile rebuild\n");runner.finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}
         finally{if(hardware!=null){GpuTarget target=hardware;runner.runOnMainSync(target::close);}if(holder.get()!=null)runner.runOnMainSync(holder.get()::closeRaster);}
+    }
+
+    private static void checkSelectionMove(Instrumentation runner, CanvasView view, GpuTarget target)
+            throws Exception {
+        runner.runOnMainSync(() -> {
+            view.ink.clear();
+            view.ink.view.x = 1440;
+            view.ink.view.y = 870;
+            view.ink.view.scale = 1;
+            view.ink.add(new Ink.Stroke(view.ink.nextId(), 0xffcf4941, 30, 315, 410, new float[]{0,0,1}));
+            view.ink.add(new Ink.Stroke(view.ink.nextId(), 0xff3169ca, 30, 470, 410, new float[]{0,0,1}));
+            view.refresh();
+        });
+        waitReady(runner, view, target);
+        runner.runOnMainSync(() -> {
+            view.armSelection();
+            pen(view, MotionEvent.ACTION_DOWN, 280, 380);
+            pen(view, MotionEvent.ACTION_MOVE, 360, 450);
+            pen(view, MotionEvent.ACTION_UP, 360, 450);
+            pen(view, MotionEvent.ACTION_DOWN, 315, 410);
+            pen(view, MotionEvent.ACTION_MOVE, 815, 410);
+            record(view, target);
+        });
+        checkMovedPixels(runner, target, "during drag");
+        runner.runOnMainSync(() -> {
+            pen(view, MotionEvent.ACTION_UP, 815, 410);
+            // Record in the same UI turn, before the tile worker can publish a new bitmap.
+            record(view, target);
+        });
+        checkMovedPixels(runner, target, "on the first frame after pen-up");
+        waitReady(runner, view, target);
+        checkMovedPixels(runner, target, "after tile rebuild");
+    }
+
+    private static void checkMovedPixels(Instrumentation runner, GpuTarget target, String stage) {
+        Bitmap image = copy(runner, target);
+        try {
+            int origin = image.getPixel(315, 410);
+            int moved = image.getPixel(815, 410);
+            check(Color.red(origin) - Color.blue(origin) < 40, "old ink reappeared " + stage);
+            check(Color.red(moved) - Color.blue(moved) > 80, "moved ink disappeared " + stage);
+            check(image.getPixel(470, 410) == 0xff3169ca, "other ink changed " + stage);
+        } finally {
+            image.recycle();
+        }
     }
     private static Bitmap copy(Instrumentation runner,GpuTarget target){AtomicReference<Bitmap> result=new AtomicReference<>();runner.runOnMainSync(()->result.set(target.copy()));return result.get();}
     private static void check(boolean condition,String text){if(!condition)throw new AssertionError(text);}

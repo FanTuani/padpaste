@@ -159,7 +159,7 @@ public final class CanvasView extends View {
         super.onDraw(c);drawGrid(c);
         if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
             if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
-            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density), fingers);
+            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density), fingers, this::drawInk);
         }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
@@ -302,7 +302,9 @@ public final class CanvasView extends View {
         boolean movedSelection = dragging;
         if (erasing) ink.commit();
         else if (dragging) {
+            double[] from = raster == null ? null : ink.selectionBounds();
             ink.move(dragX, dragY);
+            if (from != null && (dragX != 0 || dragY != 0)) raster.move(ink, from, dragX, dragY);
             selectionBox = selectionBox.translated(dragX, dragY);
         } else if (marquee) {
             if (startX != dragX && startY != dragY

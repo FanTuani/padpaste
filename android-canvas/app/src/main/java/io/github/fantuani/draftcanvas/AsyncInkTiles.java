@@ -84,7 +84,7 @@ final class AsyncInkTiles {
         final int column, row;
         final double left, top, right, bottom;
         Bitmap bitmap;
-        long sequence = -1, dirty;
+        long sequence = -1, dirty, drawModelUntil = -1;
 
         Tile(Phase phase, int column, int row, long dirty) {
             this.column = column;
@@ -193,7 +193,7 @@ final class AsyncInkTiles {
         seenRevision = ink.revision;
         Op op = new Op(++sequence, stroke);
         ops.add(op);
-        dirty(op.left, op.top, op.right, op.bottom);
+        dirty(op.left, op.top, op.right, op.bottom, false);
     }
 
     void erase(Ink ink, double ax, double ay, double bx, double by, double radius, double padding) {
@@ -201,21 +201,30 @@ final class AsyncInkTiles {
         seenRevision = ink.revision;
         Op op = new Op(++sequence, ax, ay, bx, by, radius);
         ops.add(op);
-        dirty(op.left - padding, op.top - padding, op.right + padding, op.bottom + padding);
+        dirty(op.left - padding, op.top - padding, op.right + padding, op.bottom + padding, false);
     }
 
-    private void dirty(double left, double top, double right, double bottom) {
+    void move(Ink ink, double[] from, double dx, double dy) {
+        document = ink;
+        seenRevision = ink.revision;
+        sequence++;
+        dirty(from[0], from[1], from[2], from[3], true);
+        dirty(from[0] + dx, from[1] + dy, from[2] + dx, from[3] + dy, true);
+    }
+
+    private void dirty(double left, double top, double right, double bottom, boolean drawModel) {
         snapshot = null;
         previous = null;
         if (phase == null) return;
         for (Tile tile : phase.tiles.values()) {
             if (right >= tile.left && left <= tile.right && bottom >= tile.top && top <= tile.bottom) {
                 tile.dirty = sequence;
+                if (drawModel) tile.drawModelUntil = sequence;
             }
         }
     }
 
-    void draw(Canvas canvas, Ink ink, Camera nextCamera, boolean navigating) {
+    void draw(Canvas canvas, Ink ink, Camera nextCamera, boolean navigating, InkTiles.Drawer drawModel) {
         document = ink;
         camera = nextCamera;
         if (seenRevision < 0) seenRevision = ink.revision;
@@ -248,7 +257,7 @@ final class AsyncInkTiles {
             for (int col = phase.visible.left; col <= phase.visible.right; col++) {
                 Tile tile = phase.get(col, row);
                 if (tile == null) tile = phase.add(col, row, sequence);
-                drawTile(canvas, tile);
+                drawTile(canvas, tile, drawModel);
             }
         }
         pump();
@@ -287,11 +296,19 @@ final class AsyncInkTiles {
         paper.setLocalMatrix(shaderMatrix);
     }
 
-    private void drawTile(Canvas canvas, Tile tile) {
+    private void drawTile(Canvas canvas, Tile tile, InkTiles.Drawer drawModel) {
         float left = camera.sx(tile.left), top = camera.sy(tile.top);
         float right = camera.sx(tile.right), bottom = camera.sy(tile.bottom);
         canvas.save();
         canvas.clipRect(left, top, right, bottom);
+        if (tile.sequence < tile.drawModelUntil) {
+            // A move removes ink from its old position and can uncover earlier strokes.
+            // Draw current vectors until this tile contains that revision.
+            drawModel.draw(canvas, (int) Math.floor(left), (int) Math.floor(top),
+                    (int) Math.ceil(right), (int) Math.ceil(bottom));
+            canvas.restore();
+            return;
+        }
         if (tile.sequence < 0) {
             if (containsInk(tile)) {
                 drawFallback(canvas, tile);
