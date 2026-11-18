@@ -153,7 +153,7 @@ public final class CanvasView extends View {
         super.onDraw(c);drawGrid(c);
         if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
             if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
-            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density,gridPoints,gridCount));
+            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density), fingers);
         }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
@@ -333,6 +333,7 @@ public final class CanvasView extends View {
             }else if(action==MotionEvent.ACTION_MOVE){movePen(e,i);postInvalidateOnAnimation();}return true;}
         if(Build.VERSION.SDK_INT>=33&&action==MotionEvent.ACTION_POINTER_UP&&(e.getFlags()&MotionEvent.FLAG_CANCELED)!=0){if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
         if(action==MotionEvent.ACTION_UP){
+            if (fingers) postInvalidateOnAnimation();
             fingers=false;
             if (fingerTap && !nearPen && e.getEventTime() - fingerDownTime < 250) performClick();
             fingerTap=false;

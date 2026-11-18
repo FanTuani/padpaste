@@ -22,7 +22,61 @@ final class AsyncRasterCheck {
             runner.runOnMainSync(view::undo);waitReady(runner,view,target);image=copy(runner,target);check(image.getPixel(512,1100)!=0xffcf4941&&image.getPixel(512,1100)!=0xff243137,"undo fresh ink did not preserve earlier erasure");image.recycle();
             runner.runOnMainSync(view::undo);waitReady(runner,view,target);image=copy(runner,target);check(image.getPixel(512,1100)==0xff243137,"async erase undo missing");image.recycle();
             runner.runOnMainSync(()->{view.ink.view.x+=100;view.refresh();});waitReady(runner,view,target);image=copy(runner,target);check(image.getPixel(360,1100)==0xff243137&&image.getPixel(600,1100)!=0xff243137,"async camera transform incorrect");image.recycle();
-            runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform\n");runner.finish(Activity.RESULT_OK,result);
+            runner.runOnMainSync(() -> {
+                view.ink.view.x = 1440;
+                view.ink.add(new Ink.Stroke(view.ink.nextId(), 0xffcf4941, 30, 3100, 850,
+                        new float[]{0,0,1}));
+                view.ink.add(new Ink.Stroke(view.ink.nextId(), 0xff3169ca, 30, 1450, 1950,
+                        new float[]{0,0,1}));
+                view.refresh();
+            });
+            waitReady(runner, view, target);
+            // Only two offscreen dots need bitmaps; let that prefetched work finish before the drag.
+            Thread.sleep(270);
+            runner.runOnMainSync(() -> {
+                finger(view, MotionEvent.ACTION_DOWN, 2500, 850);
+                finger(view, MotionEvent.ACTION_MOVE, 1700, 850);
+                record(view, target);
+            });
+            image = copy(runner, target);
+            check(image.getPixel(2300,850) == 0xffcf4941, "offscreen ink missing before horizontal lift");
+            image.recycle();
+            runner.runOnMainSync(() -> {
+                finger(view, MotionEvent.ACTION_MOVE, 650, 850);
+                record(view, target);
+            });
+            image = copy(runner, target);
+            check(image.getPixel(1250,850) == 0xffcf4941, "ink disappeared later in the same drag");
+            image.recycle();
+            runner.runOnMainSync(() -> {
+                finger(view, MotionEvent.ACTION_UP, 650, 850);
+                view.ink.view.x = 1440;
+                finger(view, MotionEvent.ACTION_DOWN, 1450, 1450);
+                finger(view, MotionEvent.ACTION_MOVE, 1450, 950);
+                record(view, target);
+            });
+            image = copy(runner, target);
+            check(image.getPixel(1450,1450) == 0xff3169ca, "offscreen ink missing before vertical lift");
+            image.recycle();
+            runner.runOnMainSync(() -> {
+                finger(view, MotionEvent.ACTION_UP, 1450, 950);
+                view.ink.add(new Ink.Stroke(view.ink.nextId(), 0xff3169ca, 15, 8000, 9000,
+                        new float[]{0,0,1}));
+                view.ink.view.x = 8000;
+                view.ink.view.y = 9000;
+                view.ink.view.scale = 4;
+                view.refresh();
+                record(view, target);
+            });
+            image = copy(runner, target);
+            check(image.getPixel(1440,870) == AsyncInkTiles.LOADING_PAPER, "unloaded tile was not marked gray");
+            check(image.getPixel(12,12) != AsyncInkTiles.LOADING_PAPER, "known blank area looked unloaded");
+            image.recycle();
+            waitReady(runner, view, target);
+            image = copy(runner, target);
+            check(image.getPixel(1440,870) == 0xff3169ca, "gray area did not resolve to the loaded ink");
+            image.recycle();
+            runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, gray zoom placeholders\n");runner.finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}
         finally{if(hardware!=null){GpuTarget target=hardware;runner.runOnMainSync(target::close);}if(holder.get()!=null)runner.runOnMainSync(holder.get()::closeRaster);}
     }
@@ -30,5 +84,19 @@ final class AsyncRasterCheck {
     private static void check(boolean condition,String text){if(!condition)throw new AssertionError(text);}
     private static void record(CanvasView view,GpuTarget target){Canvas c=target.node.beginRecording(view.getWidth(),view.getHeight());view.draw(c);target.node.endRecording();}
     private static void waitReady(Instrumentation runner,CanvasView view,GpuTarget target)throws Exception{long deadline=SystemClock.uptimeMillis()+15000;boolean[] ready={false};do{runner.runOnMainSync(()->{record(view,target);ready[0]=view.rasterReady();});runner.runOnMainSync(()->target.present().close());if(SystemClock.uptimeMillis()>deadline)throw new AssertionError("async tiles timed out");Thread.sleep(8);}while(!ready[0]);}
+    private static void finger(CanvasView view, int action, float x, float y) {
+        MotionEvent.PointerProperties pointer = new MotionEvent.PointerProperties();
+        pointer.id = 0;
+        pointer.toolType = MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords coordinates = new MotionEvent.PointerCoords();
+        coordinates.x = x;
+        coordinates.y = y;
+        long now = SystemClock.uptimeMillis();
+        MotionEvent event = MotionEvent.obtain(now, now, action, 1,
+                new MotionEvent.PointerProperties[]{pointer}, new MotionEvent.PointerCoords[]{coordinates},
+                0, 0, 1, 1, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
+        view.dispatchTouchEvent(event);
+        event.recycle();
+    }
     private static void pen(CanvasView view,int action,float x,float y){MotionEvent.PointerProperties p=new MotionEvent.PointerProperties();p.id=0;p.toolType=MotionEvent.TOOL_TYPE_STYLUS;MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.x=x;c.y=y;c.pressure=1;long t=SystemClock.uptimeMillis();MotionEvent e=MotionEvent.obtain(t,t,action,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,0,0,InputDevice.SOURCE_STYLUS,0);view.dispatchTouchEvent(e);e.recycle();}
 }
