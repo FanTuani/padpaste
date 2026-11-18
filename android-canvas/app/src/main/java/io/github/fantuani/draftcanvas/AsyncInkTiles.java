@@ -331,7 +331,7 @@ final class AsyncInkTiles {
         for (int row = top; row <= bottom; row++) {
             for (int col = left; col <= right; col++) {
                 Tile tile = previous.get(col, row);
-                if (tile != null) drawBitmap(canvas, tile);
+                if (tile != null && tile.sequence >= tile.drawModelUntil) drawBitmap(canvas, tile);
             }
         }
     }
