@@ -12,6 +12,8 @@ import java.util.*;
 
 public final class CanvasView extends View {
     public static final int PEN=0,SELECT=1,ERASE=2;
+    static final double MIN_GRID_SCALE = .70;
+    static final int PAPER_COLOR = 0xfffafaf7;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
@@ -69,7 +71,7 @@ public final class CanvasView extends View {
         }
     }
 
-    public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);eraserSize=dp(24);setBackgroundColor(0xFFFAFAF7);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
+    public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);eraserSize=dp(24);setBackgroundColor(PAPER_COLOR);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
     private float dp(float n){return n*getResources().getDisplayMetrics().density;}
     private double wx(float x){return ink.view.worldX(x,getWidth());}private double wy(float y){return ink.view.worldY(y,getHeight());}
     public void tool(int value){cancelPen();discardSelection();mode=value;refreshOverlay();}
@@ -207,6 +209,7 @@ public final class CanvasView extends View {
     @Override protected void onDetachedFromWindow(){stopZoomAnimation();if(raster!=null){raster.close();raster=null;}if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
     private void drawGrid(android.graphics.Canvas c){
+        if (ink.view.scale < MIN_GRID_SCALE) return;
         if(gridPoints==null||gridX!=ink.view.x||gridY!=ink.view.y||gridScale!=ink.view.scale||gridWidth!=getWidth()||gridHeight!=getHeight()){
             gridX=ink.view.x;gridY=ink.view.y;gridScale=ink.view.scale;gridWidth=getWidth();gridHeight=getHeight();
             double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
@@ -271,7 +274,7 @@ public final class CanvasView extends View {
         strokeX = startX;
         strokeY = startY;
         strokeColor = color;
-        strokeWidth = width;
+        strokeWidth = (float) (width / ink.view.scale);
         liveStroke.add(0, 0, ink.view.scale, strokeWidth);
     }
     private boolean movePen(MotionEvent e,int i){

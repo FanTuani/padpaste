@@ -19,6 +19,38 @@ public final class CanvasTestRunner extends Instrumentation {
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
 
+    private void checkGridAndPenWidth() {
+        Ink ink = new Ink();
+        CanvasView view = new CanvasView(getTargetContext(), ink);
+        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        view.layout(0, 0, 160, 160);
+        view.width = 12;
+        Bitmap image = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888);
+        try {
+            Canvas frame = new Canvas(image);
+            ink.view.scale = .69;
+            view.draw(frame);
+            check(image.getPixel(79, 79) == CanvasView.PAPER_COLOR, "dots must hide below 70%");
+            ink.view.scale = .70;
+            view.draw(frame);
+            check(image.getPixel(79, 79) != CanvasView.PAPER_COLOR, "dots must remain visible at 70%");
+            for (double scale : new double[]{.5, 1, 2}) {
+                ink.view.scale = scale;
+                pen(view, MotionEvent.ACTION_DOWN, 40, 80);
+                pen(view, MotionEvent.ACTION_MOVE, 120, 80);
+                view.draw(frame);
+                check(image.getPixel(80, 84) == view.color && image.getPixel(80, 88) != view.color,
+                        "live pen width changed with zoom at " + scale);
+                pen(view, MotionEvent.ACTION_UP, 120, 80);
+                check(Math.abs(ink.strokes.get(0).width * scale - view.width) < .001,
+                        "stored width did not match the preview");
+                ink.clear();
+            }
+        } finally {
+            image.recycle();
+        }
+    }
+
     private void checkLiveTip(CanvasView view) {
         Bitmap bitmap = Bitmap.createBitmap(240, 160, Bitmap.Config.ARGB_8888);
         float originalWidth = view.width;
@@ -101,6 +133,7 @@ public final class CanvasTestRunner extends Instrumentation {
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
             root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);
             Ink d=v.ink;time=SystemClock.uptimeMillis();
+            checkGridAndPenWidth();
             checkLiveTip(v);
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");

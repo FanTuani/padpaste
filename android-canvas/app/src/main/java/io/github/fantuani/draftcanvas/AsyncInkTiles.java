@@ -329,6 +329,7 @@ final class AsyncInkTiles {
     }
 
     private void updatePaperShader() {
+        if (camera.scale < CanvasView.MIN_GRID_SCALE) return;
         double step = camera.density * 32;
         while (step * camera.scale < camera.density * 22) step *= 2;
         while (step * camera.scale > camera.density * 60) step /= 2;
@@ -338,7 +339,7 @@ final class AsyncInkTiles {
             patternDensity = camera.density;
             Bitmap pattern = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(pattern);
-            c.drawColor(0xFFFAFAF7);
+            c.drawColor(CanvasView.PAPER_COLOR);
             Paint dots = new Paint(Paint.ANTI_ALIAS_FLAG);
             dots.setColor(0xFFB9C4BC);
             float radius = (float) (camera.density * .8 / camera.scale * 128 / step);
@@ -416,7 +417,8 @@ final class AsyncInkTiles {
         for (Op op : ops) {
             if (op.seq <= tile.sequence || !op.intersects(tile)) continue;
             if (op.stroke == null) {
-                overlayPaint.setShader(paper);
+                overlayPaint.setShader(camera.scale >= CanvasView.MIN_GRID_SCALE ? paper : null);
+                overlayPaint.setColor(CanvasView.PAPER_COLOR);
                 overlayPaint.setStyle(Paint.Style.STROKE);
                 overlayPaint.setStrokeCap(Paint.Cap.ROUND);
                 overlayPaint.setStrokeWidth((float) (op.radius * 2));
