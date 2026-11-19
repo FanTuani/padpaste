@@ -107,6 +107,8 @@ public final class CanvasView extends View {
     }
 
     void settleForSave() {
+        stopZoomAnimation();
+        lastTapTime = -1;
         finishContactForMenu();
     }
 
