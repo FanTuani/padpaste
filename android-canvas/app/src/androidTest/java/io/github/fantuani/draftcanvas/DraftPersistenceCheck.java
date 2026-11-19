@@ -32,6 +32,11 @@ final class DraftPersistenceCheck {
                     ink.begin();
                     ink.erase(350, -58, 350, -38, 10);
                     ink.commit();
+                    Ink.Stroke second = new Ink.Stroke(ink.nextId(), 0xff243137, 3, 600, 700,
+                            new float[]{0,0,1,15,20,1,30,0,1});
+                    ink.add(second);
+                    ink.selected.add(second.id);
+                    ink.resizeSelection(550, 650, 2);
                     ink.view.x = 144;
                     ink.view.y = -84.5;
                     ink.view.scale = 2.5;
@@ -47,11 +52,14 @@ final class DraftPersistenceCheck {
             } else if ("empty".equals(phase)) {
                 check(ink.strokes.isEmpty(), "Cleared ink reappeared in a fresh process");
             } else {
-                check(ink.strokes.size() == 1, "Wrong number of restored strokes");
+                check(ink.strokes.size() == 2, "Wrong number of restored strokes");
                 Ink.Stroke stroke = ink.strokes.get(0);
                 check(stroke.color == 0xFFCF4941 && stroke.width == 4.25f, "Style did not survive");
                 check(stroke.hit(320, -48, 0) && !stroke.hit(350, -48, 0) && stroke.hit(380, -48, 0),
                         "Restoring the stroke filled its erased gap");
+                Ink.Stroke resized = ink.strokes.get(1);
+                check(resized.x == 650 && resized.y == 750 && resized.width == 6 && resized.hasFlattenedGeometry(),
+                        "Restoring the draft must preserve the resized geometry");
                 check(ink.view.x == 144 && ink.view.y == -84.5 && ink.view.scale == 2.5,
                         "Wrong restored viewport");
                 if ("clear".equals(phase)) {

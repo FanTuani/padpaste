@@ -185,7 +185,7 @@ public final class CanvasView extends View {
             if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
             raster.draw(c,ink,cameraAt(ink.view.x,ink.view.y,ink.view.scale), fingers || zoomAnimator != null, zoomSettling, this::drawInk);
             if (zoomAnimator == null && raster.ready()) zoomSettling = false;
-        }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
+        }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&!dragging&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
         if (!liveStroke.isEmpty()) {
