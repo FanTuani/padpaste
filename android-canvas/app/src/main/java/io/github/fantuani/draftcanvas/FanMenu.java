@@ -53,9 +53,6 @@ final class FanMenu extends ViewGroup {
     }
 
     boolean isOpen() { return shown && !closing; }
-    boolean hasToolsAt(float x, float y) {
-        return isOpen() && !selection && confirmation == null && requestedX == x && requestedY == y;
-    }
 
     void showTools(float x, float y, int activeColor, boolean hasInk) {
         prepare(x, y, false);

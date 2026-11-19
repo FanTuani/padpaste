@@ -85,8 +85,14 @@ public final class MainActivity extends Activity {
                 canvas.undo();
             }
             @Override public void menu() {
+                if (menu.isOpen()) {
+                    menu.dismiss(true);
+                    return;
+                }
                 if (canvas.selectionArmed()) canvas.clearSelection();
-                showTools(canvas.menuAnchor());
+                PointF anchor = canvas.menuAnchor();
+                canvas.finishContactForMenu();
+                menu.showTools(anchor.x, anchor.y, canvas.color, !ink.strokes.isEmpty());
             }
             @Override public void beginSelection() {
                 menu.dismiss(false);
@@ -97,12 +103,6 @@ public final class MainActivity extends Activity {
             }
         });
         setContentView(root);
-    }
-
-    private void showTools(PointF p) {
-        if (menu.hasToolsAt(p.x, p.y)) return;
-        canvas.finishContactForMenu();
-        menu.showTools(p.x, p.y, canvas.color, !canvas.ink.strokes.isEmpty());
     }
 
     private void menuCommand(int id) {
