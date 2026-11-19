@@ -181,6 +181,7 @@ public final class CanvasTestRunner extends Instrumentation {
             pen(view, MotionEvent.ACTION_DOWN, 100, 150);
 
             MotionEvent.PointerProperties pointer = new MotionEvent.PointerProperties();
+            pointer.id = 0;
             pointer.toolType = MotionEvent.TOOL_TYPE_STYLUS;
             MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
             coords.x = 120;
