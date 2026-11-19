@@ -76,7 +76,6 @@ final class AsyncRasterCheck {
             check(image.getPixel(1440,870) == 0xff3169ca, "unloaded region did not resolve to the rendered ink");
             image.recycle();
             checkSelectionMove(runner, view, target);
-            Thread.sleep(260); // Let the palm-rejection interval after the test pen gesture expire.
             checkDoubleTapZoom(runner, view, target, .5, 1);
             checkDoubleTapZoom(runner, view, target, 1, 2);
             checkDoubleTapZoom(runner, view, target, 2, 1);

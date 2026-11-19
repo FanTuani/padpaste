@@ -85,14 +85,16 @@ public final class CanvasTestRunner extends Instrumentation {
         event(view, stylus, MotionEvent.ACTION_HOVER_ENTER, 620, 400);
         beginPinch(view, 1);
         movePinch(view, 150);
-        check(ink.view.scale == 1 && ink.view.x == 0, "palm contacts must not zoom under a hovering pen");
+        check(Math.abs(ink.view.scale - 1.5) < .001, "hover alone must not block a fresh finger gesture");
         endPinch(view, 150);
         event(view, stylus, MotionEvent.ACTION_HOVER_EXIT, 620, 400);
-        time += 400;
-        beginPinch(view, 1);
-        movePinch(view, 150);
-        check(Math.abs(ink.view.scale - 1.5) < .001, "fresh finger input must work after the palm lifts");
-        endPinch(view, 150);
+        pen(view, MotionEvent.ACTION_DOWN, 600, 400);
+        pen(view, MotionEvent.ACTION_UP, 600, 400);
+        double x = ink.view.x;
+        event(view, finger, MotionEvent.ACTION_DOWN, 600, 500);
+        event(view, finger, MotionEvent.ACTION_MOVE, 660, 500);
+        event(view, finger, MotionEvent.ACTION_UP, 660, 500);
+        check(ink.view.x < x, "a new finger drag must work immediately after lifting the pen");
     }
 
     private void checkGridAndPenWidth() {

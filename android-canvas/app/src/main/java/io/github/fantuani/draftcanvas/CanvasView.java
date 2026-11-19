@@ -17,7 +17,6 @@ public final class CanvasView extends View {
     static final float GRID_STEP_DP = 32f;
     static final float GRID_DOT_DP = 1.6f;
     private static final float RESIZE_HANDLE_DP = 20f;
-    private static final long PEN_PRIORITY_MS = 250;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
@@ -44,7 +43,6 @@ public final class CanvasView extends View {
     boolean testAsync;private AsyncInkTiles raster;
     private final InkTiles tiles=Build.VERSION.SDK_INT>=29?new InkTiles():null;
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
-    private long lastPen = -PEN_PRIORITY_MS;
     private boolean temporaryEraser;
     private boolean selectionContact, resizeContact, hoverKnown;
     private double selectionScale = 1;
@@ -331,7 +329,7 @@ public final class CanvasView extends View {
     }
     private void beginPen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);lastTool=e.getToolType(i);cursorKnown=true;
-        penId=e.getPointerId(i);fingers=false;lastPen=e.getEventTime();startX=wx(e.getX(i));startY=wy(e.getY(i));dragX=dragY=0;
+        penId=e.getPointerId(i);fingers=false;startX=wx(e.getX(i));startY=wy(e.getY(i));dragX=dragY=0;
         erasing=temporaryEraser||mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER;
         if(erasing){ink.begin();erasePoint=false;erase(startX,startY,e.getPressure(i));return;}
         if (selectionBox != null) {
@@ -359,7 +357,7 @@ public final class CanvasView extends View {
     }
     private boolean movePen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);
-        lastPen=e.getEventTime();double x=wx(e.getX(i)),y=wy(e.getY(i));
+        double x=wx(e.getX(i)),y=wy(e.getY(i));
         if(erasing){
             boolean straight=erasePoint;float maxPressure=e.getPressure(i);double tolerance=dp(.4f)/ink.view.scale;
             for(int h=0;h<e.getHistorySize();h++){maxPressure=Math.max(maxPressure,e.getHistoricalPressure(i,h));if(!erasePoint||Eraser.distanceSquared(wx(e.getHistoricalX(i,h)),wy(e.getHistoricalY(i,h)),eraseX,eraseY,x,y)>tolerance*tolerance)straight=false;}
@@ -471,10 +469,6 @@ public final class CanvasView extends View {
         resetPenContact();
     }
 
-    private boolean penHasPriority(long eventTime) {
-        return penId != -1 || nearPen || eventTime - lastPen < PEN_PRIORITY_MS;
-    }
-
     private void blockNavigation() {
         navigationBlocked = true;
         lastTapTime = -1;
@@ -490,9 +484,8 @@ public final class CanvasView extends View {
 
     @Override public boolean onHoverEvent(MotionEvent e){
         if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){
-            nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;lastPen=e.getEventTime();
+            nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;
             if (nearPen) {
-                blockNavigation();
                 hoverKnown = true;
                 hoverX = lastX = e.getX();
                 hoverY = lastY = e.getY();
@@ -514,7 +507,7 @@ public final class CanvasView extends View {
         }
         if (action == MotionEvent.ACTION_DOWN) {
             boolean finger = e.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER;
-            navigationBlocked = finger && (penHasPriority(e.getEventTime()) || PalmContact.isWide(e));
+            navigationBlocked = finger && PalmContact.isWide(e);
             if (!navigationBlocked) stopZoomAnimation();
             fingerTap = finger && !navigationBlocked;
             if (!fingerTap) lastTapTime = -1;
@@ -556,9 +549,8 @@ public final class CanvasView extends View {
         }
         if (Build.VERSION.SDK_INT >= 33 && action == MotionEvent.ACTION_POINTER_UP
                 && (e.getFlags() & MotionEvent.FLAG_CANCELED) != 0) blockNavigation();
-        // A hand still resting on the glass cannot become a new gesture just because the pen lifted.
-        if (navigationBlocked || penHasPriority(e.getEventTime())
-                || (action != MotionEvent.ACTION_DOWN && PalmContact.isWide(e))) {
+        // Reject the rest of this contact sequence, even if the reported touch size shrinks.
+        if (navigationBlocked || (action != MotionEvent.ACTION_DOWN && PalmContact.isWide(e))) {
             if (!navigationBlocked) blockNavigation();
             return true;
         }
