@@ -223,24 +223,45 @@ public final class CanvasTestRunner extends Instrumentation {
             check(v.hasSelectionBox() && !v.selectionArmed() && d.selected.size() == 1
                     && d.strokes.size() == 1 && selectionTaps[0] == 0,
                     "pen-up must preserve the selection without opening a menu");
-            pen(v, MotionEvent.ACTION_DOWN, 610, 715);
-            pen(v, MotionEvent.ACTION_UP, 610, 715);
-            check(selectionTaps[0] == 1 && v.selectionMenuAnchor().x == 610,
+            pen(v, MotionEvent.ACTION_DOWN, 570, 715);
+            pen(v, MotionEvent.ACTION_UP, 570, 715);
+            check(selectionTaps[0] == 1 && v.selectionMenuAnchor().x == 570,
                     "a pen tap in the drawn box must open its menu at the tap");
 
-            event(v, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.ACTION_HOVER_EXIT, 610, 715);
+            event(v, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.ACTION_HOVER_EXIT, 570, 715);
             time += 1000;
-            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 610, 715);
-            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_UP, 610, 715);
+            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 570, 715);
+            event(v, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_UP, 570, 715);
             check(selectionTaps[0] == 1 && v.hasSelectionBox(), "finger tap must keep the box without opening its menu");
-            pen(v, MotionEvent.ACTION_DOWN, 610, 715);
-            pen(v, MotionEvent.ACTION_MOVE, 650, 745);
-            pen(v, MotionEvent.ACTION_UP, 650, 745);
+            pen(v, MotionEvent.ACTION_DOWN, 570, 715);
+            pen(v, MotionEvent.ACTION_MOVE, 610, 745);
+            pen(v, MotionEvent.ACTION_UP, 610, 745);
             check(d.strokes.get(0).x == 540 && d.strokes.get(0).y == 730 && selectionTaps[0] == 1,
                     "dragging must move selected ink without invoking the menu");
-            pen(v, MotionEvent.ACTION_DOWN, 650, 745);
-            pen(v, MotionEvent.ACTION_UP, 650, 745);
+            pen(v, MotionEvent.ACTION_DOWN, 610, 745);
+            pen(v, MotionEvent.ACTION_UP, 610, 745);
             check(selectionTaps[0] == 2, "the box must be tappable at its moved location");
+
+            pen(v, MotionEvent.ACTION_DOWN, 660, 750);
+            pen(v, MotionEvent.ACTION_MOVE, 800, 790);
+            check(d.strokes.get(0).x == 540, "resize preview must not modify the model before pen-up");
+            pen(v, MotionEvent.ACTION_UP, 800, 790);
+            Ink.Stroke resized = d.strokes.get(0);
+            check(resized.x == 560 && resized.y == 750 && resized.width == 10
+                    && resized.pathPoints()[3] == 200 && selectionTaps[0] == 2,
+                    "corner drag must uniformly enlarge the content about the upper-left corner");
+            pen(v, MotionEvent.ACTION_DOWN, 800, 790);
+            pen(v, MotionEvent.ACTION_UP, 660, 750);
+            check(d.strokes.get(0).x == 540 && d.strokes.get(0).y == 730
+                    && d.strokes.get(0).width == 5, "the handle must shrink the selection uniformly");
+            pen(v, MotionEvent.ACTION_DOWN, 400, 600);
+            pen(v, MotionEvent.ACTION_UP, 400, 600);
+            check(!v.hasSelectionBox() && d.strokes.size() == 1 && selectionTaps[0] == 2,
+                    "the outside tap must dismiss selection without inking");
+            pen(v, MotionEvent.ACTION_DOWN, 400, 600);
+            pen(v, MotionEvent.ACTION_UP, 400, 600);
+            check(d.strokes.size() == 2, "the next contact must write normally");
+            v.undo();
 
             v.armSelection();
             pen(v, MotionEvent.ACTION_DOWN, 950, 930);

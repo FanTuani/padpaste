@@ -244,6 +244,31 @@ final class AsyncRasterCheck {
         checkMovedPixels(runner, target, "on the first frame after pen-up");
         waitReady(runner, view, target);
         checkMovedPixels(runner, target, "after tile rebuild");
+        runner.runOnMainSync(() -> {
+            pen(view, MotionEvent.ACTION_DOWN, 860, 450);
+            pen(view, MotionEvent.ACTION_MOVE, 940, 520);
+            record(view, target);
+        });
+        checkResizedPixels(runner, target);
+        runner.runOnMainSync(() -> {
+            pen(view, MotionEvent.ACTION_UP, 940, 520);
+            record(view, target);
+        });
+        checkResizedPixels(runner, target);
+        waitReady(runner, view, target);
+        checkResizedPixels(runner, target);
+    }
+
+    private static void checkResizedPixels(Instrumentation runner, GpuTarget target) {
+        Bitmap image = copy(runner, target);
+        try {
+            int origin = image.getPixel(815, 410), resized = image.getPixel(850, 440);
+            check(Color.red(origin) - Color.blue(origin) < 40, "pre-resize ink reappeared");
+            check(Color.red(resized) - Color.blue(resized) > 80, "resized ink disappeared");
+            check(image.getPixel(470, 410) == 0xff3169ca, "resize changed unselected ink");
+        } finally {
+            image.recycle();
+        }
     }
 
     private static void checkMovedPixels(Instrumentation runner, GpuTarget target, String stage) {

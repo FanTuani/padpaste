@@ -16,6 +16,7 @@ public final class CanvasView extends View {
     static final int PAPER_COLOR = 0xfffafaf7;
     static final float GRID_STEP_DP = 32f;
     static final float GRID_DOT_DP = 1.6f;
+    private static final float RESIZE_HANDLE_DP = 20f;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
@@ -43,7 +44,8 @@ public final class CanvasView extends View {
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
     private long lastPen;
     private boolean temporaryEraser;
-    private boolean selectionContact, hoverKnown;
+    private boolean selectionContact, resizeContact, hoverKnown;
+    private double selectionScale = 1;
     private int ignoredPenId = -1;
     private SelectionBox selectionBox;
     private float hoverX, hoverY;
@@ -70,6 +72,11 @@ public final class CanvasView extends View {
 
         SelectionBox translated(double x, double y) {
             return new SelectionBox(left + x, top + y, right + x, bottom + y);
+        }
+
+        SelectionBox scaled(double factor) {
+            return new SelectionBox(left, top, left + (right - left) * factor,
+                    top + (bottom - top) * factor);
         }
     }
 
@@ -190,12 +197,18 @@ public final class CanvasView extends View {
             c.restore();
         }
         SelectionBox bounds = marquee ? SelectionBox.between(startX, startY, dragX, dragY) : selectionBox;
-        if (dragging && bounds != null) bounds = bounds.translated(dragX, dragY);
+        if (dragging && bounds != null) bounds = transformedSelectionBox();
         if(bounds!=null){
             float x1=screenX(bounds.left),y1=screenY(bounds.top),x2=screenX(bounds.right),y2=screenY(bounds.bottom);
             paint.setStyle(Paint.Style.FILL);paint.setColor(0x11167B70);c.drawRect(x1,y1,x2,y2,paint);
             paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);paint.setStrokeWidth(dp(1.2f));paint.setPathEffect(new DashPathEffect(new float[]{dp(5),dp(4)},0));c.drawRect(x1,y1,x2,y2,paint);paint.setPathEffect(null);
-            if(!marquee){paint.setStyle(Paint.Style.FILL);for(float x:new float[]{x1,x2})for(float y:new float[]{y1,y2}){paint.setColor(Color.WHITE);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);c.drawCircle(x,y,dp(4),paint);paint.setStyle(Paint.Style.FILL);}}
+            if (!marquee) {
+                drawSelectionCorner(c, x1, y1);
+                drawSelectionCorner(c, x2, y1);
+                drawSelectionCorner(c, x1, y2);
+                if (ink.selected.isEmpty()) drawSelectionCorner(c, x2, y2);
+                else drawResizeHandle(c, x2, y2);
+            }
         }
         if(displayMode()==ERASE&&cursorKnown&&(nearPen||penId!=-1||temporaryEraser)){
             float radius=cursorRadius>0?cursorRadius:eraserSize/2;
@@ -204,9 +217,57 @@ public final class CanvasView extends View {
             paint.setStrokeWidth(dp(1));paint.setColor(0xD9167B70);c.drawCircle(lastX,lastY,radius,paint);
         }
     }
+
+    private SelectionBox transformedSelectionBox() {
+        return resizeContact ? selectionBox.scaled(selectionScale) : selectionBox.translated(dragX, dragY);
+    }
+
+    private void drawSelectionCorner(Canvas c, float x, float y) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.WHITE);
+        c.drawCircle(x, y, dp(4), paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1.2f));
+        paint.setColor(0xff167b70);
+        c.drawCircle(x, y, dp(4), paint);
+    }
+
+    private void drawResizeHandle(Canvas c, float x, float y) {
+        float half = dp(RESIZE_HANDLE_DP / 2), tip = dp(4.5f), wing = dp(3);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xff167b70);
+        c.drawRoundRect(x - half, y - half, x + half, y + half, dp(5), dp(5), paint);
+        paint.setColor(Color.WHITE);
+        paint.setStrokeWidth(dp(1.4f));
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        c.drawLine(x - tip, y - tip, x + tip, y + tip, paint);
+        c.drawLine(x - tip, y - tip, x - tip + wing, y - tip, paint);
+        c.drawLine(x - tip, y - tip, x - tip, y - tip + wing, paint);
+        c.drawLine(x + tip, y + tip, x + tip - wing, y + tip, paint);
+        c.drawLine(x + tip, y + tip, x + tip, y + tip - wing, paint);
+    }
+
     private void drawInk(android.graphics.Canvas c,int left,int top,int right,int bottom){
         double l=wx(left),t=wy(top),r=wx(right),b=wy(bottom);
-        for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy,l-dx-s.x,t-dy-s.y,r-dx-s.x,b-dy-s.y);}
+        for (Ink.Stroke stroke : ink.strokes) {
+            boolean transform = dragging && ink.selected.contains(stroke.id);
+            double factor = transform ? selectionScale : 1;
+            double x = stroke.x, y = stroke.y;
+            if (transform) {
+                x = selectionBox.left + (x - selectionBox.left) * factor + dragX;
+                y = selectionBox.top + (y - selectionBox.top) * factor + dragY;
+            }
+            double localLeft = (l - x) / factor, localTop = (t - y) / factor;
+            double localRight = (r - x) / factor, localBottom = (b - y) / factor;
+            if (!stroke.intersects(stroke.x + localLeft, stroke.y + localTop,
+                    stroke.x + localRight, stroke.y + localBottom)) continue;
+            c.save();
+            c.translate(screenX(x), screenY(y));
+            float scale = (float) (ink.view.scale * factor);
+            c.scale(scale, scale);
+            drawStrokeShape(c, stroke, localLeft, localTop, localRight, localBottom);
+            c.restore();
+        }
     }
     @Override protected void onDetachedFromWindow(){stopZoomAnimation();if(raster!=null){raster.close();raster=null;}if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
@@ -251,11 +312,6 @@ public final class CanvasView extends View {
         RenderState state=s.renderState instanceof RenderState?(RenderState)s.renderState:new RenderState(s.previousRender instanceof RenderState?(RenderState)s.previousRender:null);s.renderState=state;s.previousRender=null;
         for(int i=index;i<s.sections.length&&s.sections[i]<node.end;i+=2){double a=Math.max(node.start,s.sections[i]),z=Math.min(node.end,s.sections[i+1]);if(z-a<1e-9)continue;SectionKey key=new SectionKey(a,z);Path p=state.partial.get(key);if(p==null){p=state.previous.get(key);if(p==null)p=sectionPath(data,a,z);state.partial.put(key,p);}c.drawPath(p,paint);}
     }
-    private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy,double l,double t,double r,double b){
-        c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
-        drawStrokeShape(c, s, l, t, r, b);
-        c.restore();
-    }
     private void drawStrokeShape(Canvas c, Ink.Stroke s, double l, double t, double r, double b) {
         setStrokePaint(s.color, s.width);
         if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
@@ -273,9 +329,19 @@ public final class CanvasView extends View {
         penId=e.getPointerId(i);fingers=false;lastPen=e.getEventTime();startX=wx(e.getX(i));startY=wy(e.getY(i));dragX=dragY=0;
         erasing=temporaryEraser||mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER;
         if(erasing){ink.begin();erasePoint=false;erase(startX,startY,e.getPressure(i));return;}
-        selectionContact = selectionBox != null && selectionBox.contains(startX, startY);
-        if (selectionContact) return;
-        discardSelection();
+        if (selectionBox != null) {
+            float hit = dp(RESIZE_HANDLE_DP / 2 + 4);
+            resizeContact = !ink.selected.isEmpty()
+                    && Math.abs(lastX - screenX(selectionBox.right)) <= hit
+                    && Math.abs(lastY - screenY(selectionBox.bottom)) <= hit;
+            selectionContact = resizeContact || selectionBox.contains(startX, startY);
+            if (!selectionContact) {
+                discardSelection();
+                ignoredPenId = penId;
+                resetPenContact();
+            }
+            return;
+        }
         if (mode == SELECT) {
             marquee = true;
             dragX = startX;
@@ -302,8 +368,13 @@ public final class CanvasView extends View {
             double dx = x - startX, dy = y - startY;
             if (!dragging && Math.hypot(dx, dy) * ink.view.scale < dp(6)) return false;
             dragging = true;
-            dragX = dx;
-            dragY = dy;
+            if (resizeContact) {
+                double w = selectionBox.right - selectionBox.left, h = selectionBox.bottom - selectionBox.top;
+                selectionScale = Math.max(.05, Math.min(100, 1 + (dx * w + dy * h) / (w * w + h * h)));
+            } else {
+                dragX = dx;
+                dragY = dy;
+            }
         }
         else if(marquee){dragX=x;dragY=y;}
         else {
@@ -332,15 +403,19 @@ public final class CanvasView extends View {
     boolean rasterReady(){return raster!=null&&raster.ready();}
     private void finishPen(){
         boolean erased=erasing,added=false;
-        boolean tapSelection = selectionContact && !dragging
+        boolean tapSelection = selectionContact && !resizeContact && !dragging
                 && selectionBox.contains(wx(lastX), wy(lastY));
         boolean movedSelection = dragging;
         if (erasing) ink.commit();
         else if (dragging) {
             double[] from = raster == null ? null : ink.selectionBounds();
-            ink.move(dragX, dragY);
-            if (from != null && (dragX != 0 || dragY != 0)) raster.move(ink, from, dragX, dragY);
-            selectionBox = selectionBox.translated(dragX, dragY);
+            long before = ink.revision;
+            if (resizeContact) ink.resizeSelection(selectionBox.left, selectionBox.top, selectionScale);
+            else ink.move(dragX, dragY);
+            if (from != null && ink.revision != before) {
+                raster.selectionTransformed(ink, from, ink.selectionBounds());
+            }
+            selectionBox = transformedSelectionBox();
         } else if (marquee) {
             if (startX != dragX && startY != dragY
                     && Math.hypot(dragX - startX, dragY - startY) * ink.view.scale >= dp(4)) {
@@ -371,7 +446,8 @@ public final class CanvasView extends View {
         liveStroke.clear();
         erasePoint = false;
         penId = -1;
-        selectionContact = dragging = marquee = erasing = false;
+        selectionContact = resizeContact = dragging = marquee = erasing = false;
+        selectionScale = 1;
         dragX = dragY = 0;
     }
 

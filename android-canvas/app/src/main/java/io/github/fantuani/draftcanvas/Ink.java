@@ -29,6 +29,17 @@ public final class Ink {
         StrokeData data(){if(data==null)data=new StrokeData(pathPoints());return data;}
         public float[] pathPoints(){if(flattened)return points;if(geometry==null)geometry=StrokeGeometry.smooth(points,width);return geometry;}
         public Stroke offset(long id,double dx,double dy){Stroke copy=new Stroke(id,color,width,x+dx,y+dy,points,flattened,sections);copy.geometry=geometry;copy.data=data;copy.renderState=renderState;copy.previousRender=previousRender;return copy;}
+        boolean hasFlattenedGeometry() { return flattened || sections != null; }
+
+        Stroke scaled(double anchorX, double anchorY, double factor) {
+            float[] scaled = pathPoints().clone();
+            for (int i = 0; i < scaled.length; i += 3) {
+                scaled[i] *= factor;
+                scaled[i + 1] *= factor;
+            }
+            return new Stroke(id, color, (float) (width * factor), anchorX + (x - anchorX) * factor,
+                    anchorY + (y - anchorY) * factor, scaled, true, sections);
+        }
         public boolean intersects(double l,double t,double r,double b){return right>=l&&left<=r&&bottom>=t&&top<=b;}
         public boolean crossesRect(double l,double t,double r,double b){
             float[] points=pathPoints();
@@ -72,6 +83,15 @@ public final class Ink {
     public void select(double l,double t,double r,double b){selected.clear();for(Stroke s:strokes)if(s.crossesRect(l,t,r,b))selected.add(s.id);}
     public double[] selectionBounds(){double l=Double.POSITIVE_INFINITY,t=l,r=-l,b=-l;for(Stroke s:strokes)if(selected.contains(s.id)){l=Math.min(l,s.left);r=Math.max(r,s.right);t=Math.min(t,s.top);b=Math.max(b,s.bottom);}return selected.isEmpty()?null:new double[]{l,t,r,b};}
     public void move(double dx,double dy){if(selected.isEmpty()||(dx==0&&dy==0))return;begin();for(int i=0;i<strokes.size();i++){Stroke s=strokes.get(i);if(selected.contains(s.id))strokes.set(i,s.offset(s.id,dx,dy));}commit();}
+    void resizeSelection(double anchorX, double anchorY, double factor) {
+        if (selected.isEmpty() || factor == 1) return;
+        begin();
+        for (int i = 0; i < strokes.size(); i++) {
+            Stroke stroke = strokes.get(i);
+            if (selected.contains(stroke.id)) strokes.set(i, stroke.scaled(anchorX, anchorY, factor));
+        }
+        commit();
+    }
     public void copy(){List<Stroke> copied=new ArrayList<>();for(Stroke s:strokes)if(selected.contains(s.id))copied.add(s);if(!copied.isEmpty())clipboard=copied;}
     public boolean canPaste(){return !clipboard.isEmpty();}
     public void paste(double screenWidth,double screenHeight){

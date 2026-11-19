@@ -144,7 +144,7 @@ final class DraftStore {
             out.writeInt(snapshot.strokes.size());
             for (Ink.Stroke stroke : snapshot.strokes) {
                 // The intervals refer to this exact sampled geometry, even if smoothing changes later.
-                boolean flattened = stroke.sections != null;
+                boolean flattened = stroke.hasFlattenedGeometry();
                 float[] points = flattened ? stroke.pathPoints() : stroke.points;
                 out.writeInt(stroke.color);
                 out.writeFloat(stroke.width);

@@ -207,12 +207,12 @@ final class AsyncInkTiles {
         dirty(op.left - padding, op.top - padding, op.right + padding, op.bottom + padding, false);
     }
 
-    void move(Ink ink, double[] from, double dx, double dy) {
+    void selectionTransformed(Ink ink, double[] from, double[] to) {
         document = ink;
         seenRevision = ink.revision;
         sequence++;
         dirty(from[0], from[1], from[2], from[3], true);
-        dirty(from[0] + dx, from[1] + dy, from[2] + dx, from[3] + dy, true);
+        dirty(to[0], to[1], to[2], to[3], true);
     }
 
     private void dirty(double left, double top, double right, double bottom, boolean drawModel) {
