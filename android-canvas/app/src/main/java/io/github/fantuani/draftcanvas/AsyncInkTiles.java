@@ -9,6 +9,7 @@ import java.util.concurrent.*;
 /** Offscreen ink tiles live in canvas coordinates and are shared by translation frames. */
 final class AsyncInkTiles {
     private static final int SIZE = 256;
+    private static final int MAX_FALLBACK_PHASES = 3;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor(task ->
             new Thread(() -> {
@@ -25,7 +26,8 @@ final class AsyncInkTiles {
         }
     };
     private final ArrayList<Op> ops = new ArrayList<>();
-    private Phase phase, previous;
+    private Phase phase;
+    private final ArrayDeque<Phase> fallbacks = new ArrayDeque<>();
     private Phase zoomTarget;
     private Camera zoomCamera;
     private Camera camera;
@@ -185,7 +187,7 @@ final class AsyncInkTiles {
         sequence++;
         snapshot = null;
         ops.clear();
-        previous = null;
+        fallbacks.clear();
         if (phase != null) {
             for (Tile tile : phase.tiles.values()) tile.dirty = sequence;
         }
@@ -218,7 +220,7 @@ final class AsyncInkTiles {
     private void dirty(double left, double top, double right, double bottom, boolean drawModel) {
         endZoom(false);
         snapshot = null;
-        previous = null;
+        fallbacks.clear();
         if (phase == null) return;
         for (Tile tile : phase.tiles.values()) {
             if (right >= tile.left && left <= tile.right && bottom >= tile.top && top <= tile.bottom) {
@@ -234,17 +236,21 @@ final class AsyncInkTiles {
         camera = nextCamera;
         if (seenRevision < 0) seenRevision = ink.revision;
         if (ink.strokes.isEmpty()) {
-            if (phase != null || previous != null) epoch++;
-            phase = previous = null;
+            if (phase != null || !fallbacks.isEmpty()) epoch++;
+            phase = null;
+            fallbacks.clear();
             snapshot = null;
             ops.clear();
             return;
         }
         if (needsNewPhase(navigating)) {
-            // Keep an already rendered view as a temporary fallback when the raster resolution changes.
-            if (phase != null && (previous == null || visibleReady())) {
+            // A partially rendered phase can contain ink that was never visible at the old scale.
+            if (phase != null && phase.bitmapCount != 0) {
                 phase.removeOutside(phase.visible);
-                previous = phase;
+                if (phase.bitmapCount != 0) {
+                    fallbacks.addFirst(phase);
+                    if (fallbacks.size() > MAX_FALLBACK_PHASES) fallbacks.removeLast();
+                }
             }
             phase = new Phase(camera);
         }
@@ -255,7 +261,7 @@ final class AsyncInkTiles {
             phase.haloIndexed = false;
             phase.removeOutside(nearby);
         }
-        if (visibleReady()) previous = null;
+        if (visibleReady()) fallbacks.clear();
         if (!ops.isEmpty()) updatePaperShader();
 
         for (int row = phase.visible.top; row <= phase.visible.bottom; row++) {
@@ -287,7 +293,7 @@ final class AsyncInkTiles {
         if (useTarget) {
             phase = zoomTarget;
             camera = zoomCamera;
-            previous = null;
+            fallbacks.clear();
         }
         zoomTarget = null;
         zoomCamera = null;
@@ -363,6 +369,8 @@ final class AsyncInkTiles {
         if (tile.sequence < 0) {
             if (containsInk(tile)) {
                 drawFallback(canvas, tile);
+                canvas.restore();
+                return;
             } else {
                 // Empty space never needs a bitmap or a trip through the worker.
                 tile.sequence = sequence;
@@ -374,17 +382,24 @@ final class AsyncInkTiles {
     }
 
     private void drawFallback(Canvas canvas, Tile region) {
-        if (previous == null || !ops.isEmpty()) return;
-        double ratio = camera.scale / previous.scale;
-        if (ratio < .5 || ratio > 2) return;
-        int left = previous.column(region.left), right = previous.column(region.right);
-        int top = previous.row(region.top), bottom = previous.row(region.bottom);
-        for (int row = top; row <= bottom; row++) {
-            for (int col = left; col <= right; col++) {
-                Tile tile = previous.get(col, row);
-                if (tile != null && tile.sequence >= tile.drawModelUntil) drawBitmap(canvas, tile);
+        canvas.save();
+        for (Phase fallback : fallbacks) {
+            for (Tile tile : fallback.tiles.values()) {
+                if (tile.bitmap == null || tile.sequence < tile.drawModelUntil
+                        || tile.right <= region.left || tile.left >= region.right
+                        || tile.bottom <= region.top || tile.top >= region.bottom) continue;
+                canvas.save();
+                canvas.clipRect(camera.sx(tile.left), camera.sy(tile.top),
+                        camera.sx(tile.right), camera.sy(tile.bottom));
+                drawBitmap(canvas, tile);
+                drawOps(canvas, tile);
+                canvas.restore();
+                // Newer coverage replaces older coverage, including transparent paper around strokes.
+                canvas.clipOutRect(destination);
             }
         }
+        drawOps(canvas, region);
+        canvas.restore();
     }
 
     private void drawBitmap(Canvas canvas, Tile tile) {
@@ -566,7 +581,11 @@ final class AsyncInkTiles {
 
     private void pruneOps() {
         if (ops.isEmpty() || phase == null) return;
-        ops.removeIf(op -> !needsPreview(phase, op, false) && !needsPreview(previous, op, true));
+        ops.removeIf(op -> {
+            if (needsPreview(phase, op, false)) return false;
+            for (Phase fallback : fallbacks) if (needsPreview(fallback, op, true)) return false;
+            return true;
+        });
     }
 
     private boolean needsPreview(Phase source, Op op, boolean fallback) {
@@ -594,7 +613,8 @@ final class AsyncInkTiles {
     void close() {
         closed = true;
         worker.shutdownNow();
-        phase = previous = zoomTarget = null;
+        phase = zoomTarget = null;
+        fallbacks.clear();
         ops.clear();
     }
 

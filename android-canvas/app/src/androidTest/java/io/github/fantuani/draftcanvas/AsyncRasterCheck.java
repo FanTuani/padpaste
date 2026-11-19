@@ -80,9 +80,55 @@ final class AsyncRasterCheck {
             checkDoubleTapZoom(runner, view, target, .5);
             checkDoubleTapZoom(runner, view, target, 2);
             checkZoomPrewarm(runner);
+            checkFastZoomFallback(runner);
             runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load, selection release before and after tile rebuild\n");runner.finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}
         finally{if(hardware!=null){GpuTarget target=hardware;runner.runOnMainSync(target::close);}if(holder.get()!=null)runner.runOnMainSync(holder.get()::closeRaster);}
+    }
+
+    private static void checkFastZoomFallback(Instrumentation runner) throws Exception {
+        Ink ink = new Ink();
+        int red = 0xffcf4941, blue = 0xff3169ca;
+        ink.add(new Ink.Stroke(ink.nextId(), red, 60, 250, 250, new float[]{0,0,1}));
+        ink.add(new Ink.Stroke(ink.nextId(), blue, 60, 780, 250, new float[]{0,0,1}));
+        AsyncInkTiles cache = new AsyncInkTiles(() -> {});
+        Bitmap image = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(image);
+        try {
+            AsyncInkTiles.Camera first = new AsyncInkTiles.Camera(512, 512, 250, 250, 1, 2);
+            AsyncInkTiles.Camera middle = new AsyncInkTiles.Camera(512, 512, 650, 250, .6, 2);
+            AsyncInkTiles.Camera last = new AsyncInkTiles.Camera(512, 512, 650, 250, .22, 2);
+            waitForInk(runner, cache, canvas, image, ink, first, 256, red);
+            waitForInk(runner, cache, canvas, image, ink, middle, 334, blue);
+            runner.runOnMainSync(() -> {
+                image.eraseColor(Color.WHITE);
+                cache.draw(canvas, ink, last, true, false, (c, l, t, r, b) -> {});
+                check(image.getPixel(168, 256) == red, "rapid zoom lost previously visible ink");
+                check(image.getPixel(285, 256) == blue, "rapid zoom lost newly revealed ink");
+
+                image.eraseColor(Color.WHITE);
+                cache.draw(canvas, ink, last, false, false, (c, l, t, r, b) -> {});
+                check(image.getPixel(168, 256) == red && image.getPixel(285, 256) == blue,
+                        "pinch release must preserve both regions before fresh tiles arrive");
+            });
+        } finally {
+            runner.runOnMainSync(cache::close);
+            image.recycle();
+        }
+    }
+
+    private static void waitForInk(Instrumentation runner, AsyncInkTiles cache, Canvas canvas, Bitmap image,
+                                   Ink ink, AsyncInkTiles.Camera camera, int x, int color) throws Exception {
+        long deadline = SystemClock.uptimeMillis() + 4000;
+        do {
+            runner.runOnMainSync(() -> {
+                image.eraseColor(Color.WHITE);
+                cache.draw(canvas, ink, camera, true, false, (c, l, t, r, b) -> {});
+            });
+            if (image.getPixel(x, 256) == color) return;
+            Thread.sleep(8);
+        } while (SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError("timed out waiting for ink at " + camera.scale);
     }
 
     private static void checkZoomPrewarm(Instrumentation runner) throws Exception {
