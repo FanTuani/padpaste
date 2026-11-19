@@ -76,9 +76,47 @@ final class AsyncRasterCheck {
             check(image.getPixel(1440,870) == 0xff3169ca, "unloaded region did not resolve to the rendered ink");
             image.recycle();
             checkSelectionMove(runner, view, target);
+            Thread.sleep(260); // Let the palm-rejection interval after the test pen gesture expire.
+            checkDoubleTapZoom(runner, view, .5);
+            checkDoubleTapZoom(runner, view, 2);
             runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load, selection release before and after tile rebuild\n");runner.finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}
         finally{if(hardware!=null){GpuTarget target=hardware;runner.runOnMainSync(target::close);}if(holder.get()!=null)runner.runOnMainSync(holder.get()::closeRaster);}
+    }
+
+    private static void checkDoubleTapZoom(Instrumentation runner, CanvasView view, double scale)
+            throws Exception {
+        float tapX = 1000, tapY = 700;
+        double[] center = new double[2];
+        runner.runOnMainSync(() -> {
+            Viewport viewport = view.ink.view;
+            viewport.scale = scale;
+            center[0] = viewport.worldX(tapX, view.getWidth());
+            center[1] = viewport.worldY(tapY, view.getHeight());
+            finger(view, MotionEvent.ACTION_DOWN, tapX, tapY);
+            finger(view, MotionEvent.ACTION_UP, tapX, tapY);
+            check(viewport.scale == scale, "a single tap changed the zoom");
+            finger(view, MotionEvent.ACTION_DOWN, tapX, tapY);
+            finger(view, MotionEvent.ACTION_UP, tapX, tapY);
+        });
+        long deadline = SystemClock.uptimeMillis() + 2000;
+        boolean[] finished = {false};
+        do {
+            runner.runOnMainSync(() -> finished[0] = view.ink.view.scale == 1);
+            if (finished[0]) break;
+            Thread.sleep(16);
+        } while (SystemClock.uptimeMillis() < deadline);
+        runner.runOnMainSync(() -> {
+            check(finished[0], "double tap did not finish at 100%");
+            check(Math.abs(view.ink.view.x - center[0]) < .001
+                    && Math.abs(view.ink.view.y - center[1]) < .001, "double tap did not center its world point");
+            for (int tap = 0; tap < 2; tap++) {
+                finger(view, MotionEvent.ACTION_DOWN, 900, 650);
+                finger(view, MotionEvent.ACTION_UP, 900, 650);
+            }
+            check(view.ink.view.x == center[0] && view.ink.view.y == center[1],
+                    "double tap at 100% must leave the center unchanged");
+        });
     }
 
     private static void checkSelectionMove(Instrumentation runner, CanvasView view, GpuTarget target)

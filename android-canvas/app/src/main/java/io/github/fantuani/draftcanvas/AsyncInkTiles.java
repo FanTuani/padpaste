@@ -224,7 +224,8 @@ final class AsyncInkTiles {
         }
     }
 
-    void draw(Canvas canvas, Ink ink, Camera nextCamera, boolean navigating, InkTiles.Drawer drawModel) {
+    void draw(Canvas canvas, Ink ink, Camera nextCamera, boolean navigating, boolean fillMissing,
+              InkTiles.Drawer drawModel) {
         document = ink;
         camera = nextCamera;
         if (seenRevision < 0) seenRevision = ink.revision;
@@ -257,7 +258,7 @@ final class AsyncInkTiles {
             for (int col = phase.visible.left; col <= phase.visible.right; col++) {
                 Tile tile = phase.get(col, row);
                 if (tile == null) tile = phase.add(col, row, sequence);
-                drawTile(canvas, tile, drawModel);
+                drawTile(canvas, tile, fillMissing, drawModel);
             }
         }
         pump();
@@ -296,12 +297,12 @@ final class AsyncInkTiles {
         paper.setLocalMatrix(shaderMatrix);
     }
 
-    private void drawTile(Canvas canvas, Tile tile, InkTiles.Drawer drawModel) {
+    private void drawTile(Canvas canvas, Tile tile, boolean fillMissing, InkTiles.Drawer drawModel) {
         float left = camera.sx(tile.left), top = camera.sy(tile.top);
         float right = camera.sx(tile.right), bottom = camera.sy(tile.bottom);
         canvas.save();
         canvas.clipRect(left, top, right, bottom);
-        if (tile.sequence < tile.drawModelUntil) {
+        if (tile.sequence < tile.drawModelUntil || (fillMissing && tile.sequence < 0 && containsInk(tile))) {
             // A move removes ink from its old position and can uncover earlier strokes.
             // Draw current vectors until this tile contains that revision.
             drawModel.draw(canvas, (int) Math.floor(left), (int) Math.floor(top),

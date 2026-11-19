@@ -1,9 +1,13 @@
 package io.github.fantuani.draftcanvas;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.*;
 import android.os.Build;
 import android.view.*;
+import android.view.animation.DecelerateInterpolator;
 import java.util.*;
 
 public final class CanvasView extends View {
@@ -13,6 +17,10 @@ public final class CanvasView extends View {
     public Runnable changed=()->{};
     private boolean fingerTap;
     private float fingerDownX, fingerDownY;
+    private long lastTapTime = -1;
+    private float lastTapX, lastTapY;
+    private ValueAnimator zoomAnimator;
+    private boolean zoomSettling;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final class SectionKey {
         final double a,b;SectionKey(double a,double b){this.a=a;this.b=b;}
@@ -159,7 +167,8 @@ public final class CanvasView extends View {
         super.onDraw(c);drawGrid(c);
         if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
             if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
-            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density), fingers, this::drawInk);
+            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density), fingers || zoomAnimator != null, zoomSettling, this::drawInk);
+            if (zoomAnimator == null && raster.ready()) zoomSettling = false;
         }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
@@ -190,7 +199,7 @@ public final class CanvasView extends View {
         double l=wx(left),t=wy(top),r=wx(right),b=wy(bottom);
         for(Ink.Stroke s:ink.strokes){double dx=ink.selected.contains(s.id)?dragX:0,dy=ink.selected.contains(s.id)?dragY:0;if(s.intersects(l-dx,t-dy,r-dx,b-dy))drawStroke(c,s,dx,dy,l-dx-s.x,t-dy-s.y,r-dx-s.x,b-dy-s.y);}
     }
-    @Override protected void onDetachedFromWindow(){if(raster!=null){raster.close();raster=null;}if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
+    @Override protected void onDetachedFromWindow(){stopZoomAnimation();if(raster!=null){raster.close();raster=null;}if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
     private void drawGrid(android.graphics.Canvas c){
         if(gridPoints==null||gridX!=ink.view.x||gridY!=ink.view.y||gridScale!=ink.view.scale||gridWidth!=getWidth()||gridHeight!=getHeight()){
@@ -365,14 +374,17 @@ public final class CanvasView extends View {
     }
     @Override public boolean onTouchEvent(MotionEvent e){
         getParent().requestDisallowInterceptTouchEvent(true);int action=e.getActionMasked(),index=e.getActionIndex();
-        if(action==MotionEvent.ACTION_CANCEL){fingerTap=false;ignoredPenId=-1;cancelPen();if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
+        if(action==MotionEvent.ACTION_CANCEL){lastTapTime=-1;fingerTap=false;ignoredPenId=-1;cancelPen();if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
         if (action == MotionEvent.ACTION_DOWN) {
+            stopZoomAnimation();
             fingerTap = e.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER;
+            if (!fingerTap) lastTapTime = -1;
             fingerDownX = e.getX(index);
             fingerDownY = e.getY(index);
         } else if (action == MotionEvent.ACTION_POINTER_DOWN
                 || Math.hypot(e.getX(index) - fingerDownX, e.getY(index) - fingerDownY) > dp(8)) {
             fingerTap = false;
+            lastTapTime = -1;
         }
         if (ignoredPenId != -1) {
             if (action == MotionEvent.ACTION_DOWN || e.findPointerIndex(ignoredPenId) < 0) ignoredPenId = -1;
@@ -405,6 +417,10 @@ public final class CanvasView extends View {
         if(action==MotionEvent.ACTION_UP){
             if (fingers) postInvalidateOnAnimation();
             fingers=false;
+            if (fingerTap && !nearPen && e.getEventTime() - lastPen >= 250
+                    && e.getEventTime() - e.getDownTime() < ViewConfiguration.getLongPressTimeout()) {
+                handleFingerTap(e);
+            } else lastTapTime = -1;
             fingerTap=false;
             return true;
         }
@@ -441,7 +457,61 @@ public final class CanvasView extends View {
     }
     @Override public boolean performClick(){return hasSelectionBox() && super.performClick();}
 
+    private void handleFingerTap(MotionEvent event) {
+        float x = event.getX(), y = event.getY();
+        long upTime = event.getEventTime();
+        long interval = event.getDownTime() - lastTapTime;
+        if (lastTapTime >= 0 && interval >= 0 && interval <= ViewConfiguration.getDoubleTapTimeout()
+                && Math.hypot(x - lastTapX, y - lastTapY) <= dp(32)) {
+            lastTapTime = -1;
+            zoomToActualSize(x, y);
+        } else {
+            lastTapTime = upTime;
+            lastTapX = x;
+            lastTapY = y;
+        }
+    }
+
+    private void zoomToActualSize(float x, float y) {
+        if (ink.view.scale == 1) return;
+        double targetX = wx(x), targetY = wy(y);
+        double logScale = Math.log(ink.view.scale);
+        double offsetX = x - getWidth() / 2.0, offsetY = y - getHeight() / 2.0;
+        ValueAnimator animation = ValueAnimator.ofFloat(0f, 1f);
+        animation.setDuration(240);
+        animation.setInterpolator(new DecelerateInterpolator(1.65f));
+        animation.addUpdateListener(frame -> {
+            double remaining = 1 - (float) frame.getAnimatedValue();
+            ink.view.scale = Math.exp(remaining * logScale);
+            ink.view.x = targetX - remaining * offsetX / ink.view.scale;
+            ink.view.y = targetY - remaining * offsetY / ink.view.scale;
+            invalidate();
+            changed.run();
+        });
+        animation.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(Animator ended) {
+                zoomAnimator = null;
+                postInvalidateOnAnimation();
+            }
+        });
+        zoomSettling = true;
+        zoomAnimator = animation;
+        animation.start();
+    }
+
+    private void stopZoomAnimation() {
+        if (zoomAnimator != null) zoomAnimator.cancel();
+    }
+
+    void resetZoom() {
+        stopZoomAnimation();
+        if (ink.view.scale == 1) return;
+        ink.view.scale = 1;
+        refresh();
+    }
+
     void overview() {
+        stopZoomAnimation();
         double left = Double.POSITIVE_INFINITY, top = left, right = -left, bottom = -left;
         for (Ink.Stroke stroke : ink.strokes) {
             left = Math.min(left, stroke.left);
