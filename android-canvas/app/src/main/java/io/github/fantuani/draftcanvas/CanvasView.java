@@ -17,10 +17,12 @@ public final class CanvasView extends View {
     static final float GRID_STEP_DP = 32f;
     static final float GRID_DOT_DP = 1.6f;
     private static final float RESIZE_HANDLE_DP = 20f;
+    private static final long PEN_PRIORITY_MS = 250;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
     private boolean fingerTap;
+    private boolean navigationBlocked;
     private float fingerDownX, fingerDownY;
     private long lastTapTime = -1;
     private float lastTapX, lastTapY;
@@ -42,7 +44,7 @@ public final class CanvasView extends View {
     boolean testAsync;private AsyncInkTiles raster;
     private final InkTiles tiles=Build.VERSION.SDK_INT>=29?new InkTiles():null;
     private int penId=-1;private boolean erasing,dragging,marquee,nearPen;
-    private long lastPen;
+    private long lastPen = -PEN_PRIORITY_MS;
     private boolean temporaryEraser;
     private boolean selectionContact, resizeContact, hoverKnown;
     private double selectionScale = 1;
@@ -469,10 +471,28 @@ public final class CanvasView extends View {
         resetPenContact();
     }
 
+    private boolean penHasPriority(long eventTime) {
+        return penId != -1 || nearPen || eventTime - lastPen < PEN_PRIORITY_MS;
+    }
+
+    private void blockNavigation() {
+        navigationBlocked = true;
+        lastTapTime = -1;
+        fingerTap = false;
+        if (!fingers) return;
+        fingers = false;
+        if (ink.view.x == gestureX && ink.view.y == gestureY && ink.view.scale == gestureScale) return;
+        ink.view.x = gestureX;
+        ink.view.y = gestureY;
+        ink.view.scale = gestureScale;
+        refresh();
+    }
+
     @Override public boolean onHoverEvent(MotionEvent e){
         if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){
             nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;lastPen=e.getEventTime();
             if (nearPen) {
+                blockNavigation();
                 hoverKnown = true;
                 hoverX = lastX = e.getX();
                 hoverY = lastY = e.getY();
@@ -485,10 +505,18 @@ public final class CanvasView extends View {
     }
     @Override public boolean onTouchEvent(MotionEvent e){
         getParent().requestDisallowInterceptTouchEvent(true);int action=e.getActionMasked(),index=e.getActionIndex();
-        if(action==MotionEvent.ACTION_CANCEL){lastTapTime=-1;fingerTap=false;ignoredPenId=-1;cancelPen();if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
+        if (action == MotionEvent.ACTION_CANCEL) {
+            blockNavigation();
+            ignoredPenId = -1;
+            cancelPen();
+            refresh();
+            return true;
+        }
         if (action == MotionEvent.ACTION_DOWN) {
-            stopZoomAnimation();
-            fingerTap = e.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER;
+            boolean finger = e.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER;
+            navigationBlocked = finger && penHasPriority(e.getEventTime());
+            if (!navigationBlocked) stopZoomAnimation();
+            fingerTap = finger && !navigationBlocked;
             if (!fingerTap) lastTapTime = -1;
             fingerDownX = e.getX(index);
             fingerDownY = e.getY(index);
@@ -508,6 +536,8 @@ public final class CanvasView extends View {
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             int tool = e.getToolType(index);
             if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) {
+                blockNavigation();
+                stopZoomAnimation();
                 beginPen(e, index);
                 if (!liveStroke.isEmpty()) {
                     requestUnbufferedDispatch(e);
@@ -524,12 +554,17 @@ public final class CanvasView extends View {
             }
             return true;
         }
-        if(Build.VERSION.SDK_INT>=33&&action==MotionEvent.ACTION_POINTER_UP&&(e.getFlags()&MotionEvent.FLAG_CANCELED)!=0){if(fingers){ink.view.x=gestureX;ink.view.y=gestureY;ink.view.scale=gestureScale;}fingers=false;refresh();return true;}
+        if (Build.VERSION.SDK_INT >= 33 && action == MotionEvent.ACTION_POINTER_UP
+                && (e.getFlags() & MotionEvent.FLAG_CANCELED) != 0) blockNavigation();
+        // A hand still resting on the glass cannot become a new gesture just because the pen lifted.
+        if (navigationBlocked || penHasPriority(e.getEventTime())) {
+            if (!navigationBlocked) blockNavigation();
+            return true;
+        }
         if(action==MotionEvent.ACTION_UP){
             if (fingers) postInvalidateOnAnimation();
             fingers=false;
-            if (fingerTap && !nearPen && e.getEventTime() - lastPen >= 250
-                    && e.getEventTime() - e.getDownTime() < ViewConfiguration.getLongPressTimeout()) {
+            if (fingerTap && e.getEventTime() - e.getDownTime() < ViewConfiguration.getLongPressTimeout()) {
                 handleFingerTap(e);
             } else lastTapTime = -1;
             fingerTap=false;
@@ -537,7 +572,7 @@ public final class CanvasView extends View {
         }
         int count=0;float cx=0,cy=0,distance=0,firstX=0,firstY=0;
         for(int i=0;i<e.getPointerCount();i++){if(action==MotionEvent.ACTION_POINTER_UP&&i==index)continue;if(e.getToolType(i)!=MotionEvent.TOOL_TYPE_FINGER)continue;if(count==0){firstX=e.getX(i);firstY=e.getY(i);}else if(count==1)distance=(float)Math.hypot(e.getX(i)-firstX,e.getY(i)-firstY);cx+=e.getX(i);cy+=e.getY(i);count++;if(count==2)break;}
-        if(count==0||((nearPen||e.getEventTime()-lastPen<250)&&count==1)){fingers=false;return true;}cx/=count;cy/=count;
+        if(count==0){fingers=false;return true;}cx/=count;cy/=count;
         if (!fingers || count != fingerCount) {
             if (!fingers) {
                 gestureX = ink.view.x;

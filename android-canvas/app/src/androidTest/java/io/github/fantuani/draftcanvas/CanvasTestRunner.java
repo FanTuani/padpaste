@@ -13,11 +13,55 @@ public final class CanvasTestRunner extends Instrumentation {
     @Override public void onCreate(Bundle args){super.onCreate(args);options=args;perf=args!=null&&"true".equals(args.getString("perf"));start();}
     private void check(boolean value,String message){if(!value)throw new AssertionError(message);}
     private void event(CanvasView view,int tool,int action,float... xy){
+        int[] tools = new int[xy.length / 2];
+        java.util.Arrays.fill(tools, tool);
+        mixedEvent(view, tools, action, xy);
+    }
+    private void mixedEvent(CanvasView view, int[] tools, int action, float... xy) {
         int n=xy.length/2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[n];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[n];
-        for(int i=0;i<n;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=tool;coords[i]=new MotionEvent.PointerCoords();coords[i].x=xy[i*2];coords[i].y=xy[i*2+1];coords[i].pressure=pressure;coords[i].size=.1f;}
-        MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tool==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT||action==MotionEvent.ACTION_HOVER_MOVE)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
+        for(int i=0;i<n;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=tools[i];coords[i]=new MotionEvent.PointerCoords();coords[i].x=xy[i*2];coords[i].y=xy[i*2+1];coords[i].pressure=pressure;coords[i].size=.1f;}
+        MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tools[0]==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT||action==MotionEvent.ACTION_HOVER_MOVE)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
+
+    private void checkPalmRejection() {
+        Ink ink = new Ink();
+        CanvasView view = new CanvasView(getTargetContext(), ink);
+        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        view.layout(0, 0, 1440, 870);
+        int finger = MotionEvent.TOOL_TYPE_FINGER;
+        int stylus = MotionEvent.TOOL_TYPE_STYLUS;
+        int secondPointer = 1 << MotionEvent.ACTION_POINTER_INDEX_SHIFT;
+
+        event(view, finger, MotionEvent.ACTION_DOWN, 500, 500);
+        event(view, finger, MotionEvent.ACTION_MOVE, 550, 500);
+        check(ink.view.x != 0, "finger must be able to pan before pen input");
+        mixedEvent(view, new int[]{finger, stylus}, MotionEvent.ACTION_POINTER_DOWN | secondPointer,
+                550, 500, 600, 400);
+        check(ink.view.x == 0, "pen arrival must undo the palm's provisional pan");
+        mixedEvent(view, new int[]{finger, stylus}, MotionEvent.ACTION_MOVE, 600, 500, 660, 410);
+        mixedEvent(view, new int[]{finger, stylus}, MotionEvent.ACTION_POINTER_UP | secondPointer,
+                600, 500, 690, 420);
+        check(ink.strokes.size() == 1, "palm contact must not interrupt the pen stroke");
+        time += 400;
+        event(view, finger, MotionEvent.ACTION_POINTER_DOWN | secondPointer, 600, 500, 800, 500);
+        event(view, finger, MotionEvent.ACTION_MOVE, 590, 500, 880, 500);
+        check(ink.view.scale == 1 && ink.view.x == 0, "a remaining palm must not become a pinch after pen-up");
+        event(view, finger, MotionEvent.ACTION_POINTER_UP | secondPointer, 590, 500, 880, 500);
+        event(view, finger, MotionEvent.ACTION_UP, 590, 500);
+
+        event(view, stylus, MotionEvent.ACTION_HOVER_ENTER, 620, 400);
+        beginPinch(view, 1);
+        movePinch(view, 150);
+        check(ink.view.scale == 1 && ink.view.x == 0, "palm contacts must not zoom under a hovering pen");
+        endPinch(view, 150);
+        event(view, stylus, MotionEvent.ACTION_HOVER_EXIT, 620, 400);
+        time += 400;
+        beginPinch(view, 1);
+        movePinch(view, 150);
+        check(Math.abs(ink.view.scale - 1.5) < .001, "fresh finger input must work after the palm lifts");
+        endPinch(view, 150);
+    }
 
     private void checkGridAndPenWidth() {
         Ink ink = new Ink();
@@ -140,6 +184,7 @@ public final class CanvasTestRunner extends Instrumentation {
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
             root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);
             Ink d=v.ink;time=SystemClock.uptimeMillis();
+            checkPalmRejection();
             checkGridAndPenWidth();
             checkLiveTip(v);
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
