@@ -47,7 +47,9 @@ public final class CanvasView extends View {
     private boolean selectionContact, resizeContact, hoverKnown;
     private double selectionScale = 1;
     private int ignoredPenId = -1;
-    private SelectionBox selectionBox;
+    private Lasso selectionBox;
+    private final Lasso.Trace lassoTrace = new Lasso.Trace();
+    private final Path lassoPath = new Path();
     private float hoverX, hoverY;
     private float lastX,lastY,lastPressure;
     private int lastTool;
@@ -60,26 +62,6 @@ public final class CanvasView extends View {
     private boolean fingers;private int fingerCount;private float prevX,prevY,prevDistance;
     private double gestureX,gestureY,gestureScale;
     private final Viewport.Pinch pinch = new Viewport.Pinch();
-    private record SelectionBox(double left, double top, double right, double bottom) {
-        static SelectionBox between(double x, double y, double otherX, double otherY) {
-            return new SelectionBox(Math.min(x, otherX), Math.min(y, otherY),
-                    Math.max(x, otherX), Math.max(y, otherY));
-        }
-
-        boolean contains(double x, double y) {
-            return x >= left && x <= right && y >= top && y <= bottom;
-        }
-
-        SelectionBox translated(double x, double y) {
-            return new SelectionBox(left + x, top + y, right + x, bottom + y);
-        }
-
-        SelectionBox scaled(double factor) {
-            return new SelectionBox(left, top, left + (right - left) * factor,
-                    top + (bottom - top) * factor);
-        }
-    }
-
     public CanvasView(Context c,Ink document){super(c);ink=document;width=dp(2.3f);eraserSize=dp(24);setBackgroundColor(PAPER_COLOR);setFocusable(true);setContentDescription("草稿画布：手写笔书写，手指移动，双指缩放");if(Build.VERSION.SDK_INT>=26)setDefaultFocusHighlightEnabled(false);}
     private float dp(float n){return n*getResources().getDisplayMetrics().density;}
     private double wx(float x){return ink.view.worldX(x,getWidth());}private double wy(float y){return ink.view.worldY(y,getHeight());}
@@ -165,7 +147,7 @@ public final class CanvasView extends View {
         if (!ink.canPaste()) return;
         ink.paste(getWidth(), getHeight());
         double[] bounds = ink.selectionBounds();
-        selectionBox = new SelectionBox(bounds[0], bounds[1], bounds[2], bounds[3]);
+        selectionBox = Lasso.rectangle(bounds[0], bounds[1], bounds[2], bounds[3]);
         refresh();
     }
 
@@ -208,20 +190,7 @@ public final class CanvasView extends View {
             liveStroke.draw(c, paint, strokeWidth);
             c.restore();
         }
-        SelectionBox bounds = marquee ? SelectionBox.between(startX, startY, dragX, dragY) : selectionBox;
-        if (dragging && bounds != null) bounds = transformedSelectionBox();
-        if(bounds!=null){
-            float x1=screenX(bounds.left),y1=screenY(bounds.top),x2=screenX(bounds.right),y2=screenY(bounds.bottom);
-            paint.setStyle(Paint.Style.FILL);paint.setColor(0x11167B70);c.drawRect(x1,y1,x2,y2,paint);
-            paint.setStyle(Paint.Style.STROKE);paint.setColor(0xFF167B70);paint.setStrokeWidth(dp(1.2f));paint.setPathEffect(new DashPathEffect(new float[]{dp(5),dp(4)},0));c.drawRect(x1,y1,x2,y2,paint);paint.setPathEffect(null);
-            if (!marquee) {
-                drawSelectionCorner(c, x1, y1);
-                drawSelectionCorner(c, x2, y1);
-                drawSelectionCorner(c, x1, y2);
-                if (ink.selected.isEmpty()) drawSelectionCorner(c, x2, y2);
-                else drawResizeHandle(c, x2, y2);
-            }
-        }
+        drawLasso(c);
         if(displayMode()==ERASE&&cursorKnown&&(nearPen||penId!=-1||temporaryEraser)){
             float radius=cursorRadius>0?cursorRadius:eraserSize/2;
             paint.setStyle(Paint.Style.FILL);paint.setColor(0x10167B70);c.drawCircle(lastX,lastY,radius,paint);
@@ -230,18 +199,40 @@ public final class CanvasView extends View {
         }
     }
 
-    private SelectionBox transformedSelectionBox() {
-        return resizeContact ? selectionBox.scaled(selectionScale) : selectionBox.translated(dragX, dragY);
-    }
-
-    private void drawSelectionCorner(Canvas c, float x, float y) {
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.WHITE);
-        c.drawCircle(x, y, dp(4), paint);
+    private void drawLasso(Canvas canvas) {
+        if (!marquee && selectionBox == null) return;
+        double[] points = marquee ? lassoTrace.points : selectionBox.points;
+        int count = marquee ? lassoTrace.size : points.length;
+        if (count < 4) return;
+        lassoPath.rewind();
+        lassoPath.setFillType(Path.FillType.EVEN_ODD);
+        double scale = dragging ? selectionScale : 1;
+        double anchorX = dragging ? selectionBox.left : 0;
+        double anchorY = dragging ? selectionBox.top : 0;
+        double offsetX = dragging ? dragX : 0;
+        double offsetY = dragging ? dragY : 0;
+        for (int i = 0; i < count; i += 2) {
+            float x = screenX(anchorX + (points[i] - anchorX) * scale + offsetX);
+            float y = screenY(anchorY + (points[i + 1] - anchorY) * scale + offsetY);
+            if (i == 0) lassoPath.moveTo(x, y);
+            else lassoPath.lineTo(x, y);
+        }
+        if (!marquee) {
+            lassoPath.close();
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0x11167b70);
+            canvas.drawPath(lassoPath, paint);
+        }
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(1.2f));
         paint.setColor(0xff167b70);
-        c.drawCircle(x, y, dp(4), paint);
+        paint.setStrokeWidth(dp(1.2f));
+        paint.setPathEffect(new DashPathEffect(new float[]{dp(5), dp(4)}, 0));
+        canvas.drawPath(lassoPath, paint);
+        paint.setPathEffect(null);
+        if (!marquee && !ink.selected.isEmpty()) {
+            drawResizeHandle(canvas, screenX(anchorX + (selectionBox.right - anchorX) * scale + offsetX),
+                    screenY(anchorY + (selectionBox.bottom - anchorY) * scale + offsetY));
+        }
     }
 
     private void drawResizeHandle(Canvas c, float x, float y) {
@@ -353,8 +344,8 @@ public final class CanvasView extends View {
         }
         if (mode == SELECT) {
             marquee = true;
-            dragX = startX;
-            dragY = startY;
+            lassoTrace.clear();
+            lassoTrace.add(startX, startY, 0);
             return;
         }
         liveStroke.clear();
@@ -385,7 +376,14 @@ public final class CanvasView extends View {
                 dragY = dy;
             }
         }
-        else if(marquee){dragX=x;dragY=y;}
+        else if (marquee) {
+            double spacing = dp(.65f) / ink.view.scale;
+            boolean changed = false;
+            for (int h = 0; h < e.getHistorySize(); h++) {
+                changed |= lassoTrace.add(wx(e.getHistoricalX(i, h)), wy(e.getHistoricalY(i, h)), spacing);
+            }
+            return lassoTrace.add(x, y, spacing) || changed;
+        }
         else {
             boolean changed = false;
             for (int h = 0; h < e.getHistorySize(); h++) {
@@ -424,12 +422,13 @@ public final class CanvasView extends View {
             if (from != null && ink.revision != before) {
                 raster.selectionTransformed(ink, from, ink.selectionBounds());
             }
-            selectionBox = transformedSelectionBox();
+            selectionBox = selectionBox.transform(selectionScale, dragX, dragY);
         } else if (marquee) {
-            if (startX != dragX && startY != dragY
-                    && Math.hypot(dragX - startX, dragY - startY) * ink.view.scale >= dp(4)) {
-                selectionBox = SelectionBox.between(startX, startY, dragX, dragY);
-                ink.select(selectionBox.left, selectionBox.top, selectionBox.right, selectionBox.bottom);
+            double minimum = dp(4) / ink.view.scale;
+            Lasso completed = lassoTrace.finish(minimum * minimum);
+            if (completed != null) {
+                selectionBox = completed;
+                ink.select(selectionBox);
                 mode = PEN;
             }
         }
@@ -457,6 +456,7 @@ public final class CanvasView extends View {
         penId = -1;
         selectionContact = resizeContact = dragging = marquee = erasing = false;
         selectionScale = 1;
+        lassoTrace.clear();
         dragX = dragY = 0;
     }
 

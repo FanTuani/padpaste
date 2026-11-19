@@ -62,6 +62,25 @@ public final class Ink {
                 if(Math.hypot(wx-px-u*vx,wy-py-u*vy)<=tolerance+width/2&&StrokeData.visible(sections,i/3.0-1+u,i/3.0-1+u))return true;px=nx;py=ny;
             }return false;
         }
+
+        boolean crossesLasso(Lasso lasso) {
+            if (!intersects(lasso.left, lasso.top, lasso.right, lasso.bottom)) return false;
+            StrokeData geometry = data();
+            double radius = width / 2;
+            int count = sections == null ? 2 : sections.length;
+            for (int range = 0; range < count; range += 2) {
+                double start = sections == null ? 0 : sections[range];
+                double end = sections == null ? geometry.segments : sections[range + 1];
+                do {
+                    double next = Math.min(end, Math.floor(start) + 1);
+                    if (lasso.intersectsStrokeSegment(x + geometry.coordinate(start, 0),
+                            y + geometry.coordinate(start, 1), x + geometry.coordinate(next, 0),
+                            y + geometry.coordinate(next, 1), radius)) return true;
+                    start = next;
+                } while (start < end);
+            }
+            return false;
+        }
     }
     public final Viewport view=new Viewport();
     public final ArrayList<Stroke> strokes=new ArrayList<>();
@@ -81,6 +100,10 @@ public final class Ink {
     public void undo(){if(!undo.isEmpty()){redo.addLast(new ArrayList<>(strokes));strokes.clear();strokes.addAll(undo.removeLast());selected.clear();revision++;}}
     public void redo(){if(!redo.isEmpty()){undo.addLast(new ArrayList<>(strokes));strokes.clear();strokes.addAll(redo.removeLast());selected.clear();revision++;}}
     public void select(double l,double t,double r,double b){selected.clear();for(Stroke s:strokes)if(s.crossesRect(l,t,r,b))selected.add(s.id);}
+    void select(Lasso lasso) {
+        selected.clear();
+        for (Stroke stroke : strokes) if (stroke.crossesLasso(lasso)) selected.add(stroke.id);
+    }
     public double[] selectionBounds(){double l=Double.POSITIVE_INFINITY,t=l,r=-l,b=-l;for(Stroke s:strokes)if(selected.contains(s.id)){l=Math.min(l,s.left);r=Math.max(r,s.right);t=Math.min(t,s.top);b=Math.max(b,s.bottom);}return selected.isEmpty()?null:new double[]{l,t,r,b};}
     public void move(double dx,double dy){if(selected.isEmpty()||(dx==0&&dy==0))return;begin();for(int i=0;i<strokes.size();i++){Stroke s=strokes.get(i);if(selected.contains(s.id))strokes.set(i,s.offset(s.id,dx,dy));}commit();}
     void resizeSelection(double anchorX, double anchorY, double factor) {

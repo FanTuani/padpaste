@@ -145,7 +145,7 @@ public final class CanvasTestRunner extends Instrumentation {
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");
             time+=1000;double x=d.view.x;event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_DOWN,400,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,450,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,450,700);check(d.strokes.size()==1&&d.view.x<x,"finger must pan without ink");
-            d.view.x=d.view.y=0;d.view.scale=1;v.tool(CanvasView.SELECT);pen(v,MotionEvent.ACTION_DOWN,400,480);pen(v,MotionEvent.ACTION_MOVE,640,620);pen(v,MotionEvent.ACTION_UP,640,620);check(d.selected.size()==1,"rectangle selection missed stroke");
+            d.view.x=d.view.y=0;d.view.scale=1;v.tool(CanvasView.SELECT);pen(v,MotionEvent.ACTION_DOWN,400,480);pen(v,MotionEvent.ACTION_MOVE,640,480);pen(v,MotionEvent.ACTION_MOVE,640,620);pen(v,MotionEvent.ACTION_UP,400,620);check(d.selected.size()==1,"lasso selection missed stroke");
             double original=d.strokes.get(0).x;pen(v,MotionEvent.ACTION_DOWN,520,550);pen(v,MotionEvent.ACTION_MOVE,560,600);pen(v,MotionEvent.ACTION_UP,560,600);check(Math.abs(d.strokes.get(0).x-original-40)<.01,"selected stroke did not move");
             d.copy();d.paste(v.getWidth(),v.getHeight());check(d.strokes.size()==2,"paste did not clone ink");d.undo();check(d.strokes.size()==1,"undo paste failed");d.redo();check(d.strokes.size()==2,"redo paste failed");
             v.tool(CanvasView.PEN);d.view.x=d.view.y=0;d.view.scale=1;time+=1000;
@@ -218,8 +218,9 @@ public final class CanvasTestRunner extends Instrumentation {
             check(v.selectionArmed() && selectionTaps[0] == 0, "a tap must not create a rectangle");
 
             pen(v, MotionEvent.ACTION_DOWN, 480, 680);
+            pen(v, MotionEvent.ACTION_MOVE, 620, 680);
             pen(v, MotionEvent.ACTION_MOVE, 620, 720);
-            pen(v, MotionEvent.ACTION_UP, 620, 720);
+            pen(v, MotionEvent.ACTION_UP, 480, 720);
             check(v.hasSelectionBox() && !v.selectionArmed() && d.selected.size() == 1
                     && d.strokes.size() == 1 && selectionTaps[0] == 0,
                     "pen-up must preserve the selection without opening a menu");
@@ -265,8 +266,9 @@ public final class CanvasTestRunner extends Instrumentation {
 
             v.armSelection();
             pen(v, MotionEvent.ACTION_DOWN, 950, 930);
+            pen(v, MotionEvent.ACTION_MOVE, 800, 930);
             pen(v, MotionEvent.ACTION_MOVE, 800, 800);
-            pen(v, MotionEvent.ACTION_UP, 800, 800);
+            pen(v, MotionEvent.ACTION_UP, 950, 800);
             check(v.hasSelectionBox() && d.selected.isEmpty() && selectionTaps[0] == 2,
                     "an empty box must remain available without auto-opening the menu");
             pen(v, MotionEvent.ACTION_DOWN, 850, 850);
@@ -278,6 +280,6 @@ public final class CanvasTestRunner extends Instrumentation {
                     "overview must center existing ink");
             v.refresh();
         });
-        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, rectangle select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, armed selection, pen tap and drag, silent finger taps\n");finish(Activity.RESULT_OK,result);
+        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, lasso select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, armed selection, pen tap and drag, silent finger taps\n");finish(Activity.RESULT_OK,result);
     }catch(Throwable e){result.putString("stream","FAIL: "+e);finish(Activity.RESULT_CANCELED,result);}}
 }

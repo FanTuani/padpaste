@@ -229,8 +229,9 @@ final class AsyncRasterCheck {
         runner.runOnMainSync(() -> {
             view.armSelection();
             pen(view, MotionEvent.ACTION_DOWN, 280, 380);
+            pen(view, MotionEvent.ACTION_MOVE, 360, 380);
             pen(view, MotionEvent.ACTION_MOVE, 360, 450);
-            pen(view, MotionEvent.ACTION_UP, 360, 450);
+            pen(view, MotionEvent.ACTION_UP, 280, 450);
             pen(view, MotionEvent.ACTION_DOWN, 315, 410);
             pen(view, MotionEvent.ACTION_MOVE, 815, 410);
             record(view, target);
