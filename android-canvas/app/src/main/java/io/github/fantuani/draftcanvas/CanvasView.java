@@ -169,10 +169,10 @@ public final class CanvasView extends View {
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
         if (Build.VERSION.SDK_INT >= 29 && c.isHardwareAccelerated() && zoomPreview != null) {
-            zoomPreview.draw(c);
+            raster.drawZoom(c, cameraAt(ink.view.x, ink.view.y, ink.view.scale), () -> zoomPreview.draw(c));
         } else if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
             if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
-            raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density), fingers || zoomAnimator != null, zoomSettling, this::drawInk);
+            raster.draw(c,ink,cameraAt(ink.view.x,ink.view.y,ink.view.scale), fingers || zoomAnimator != null, zoomSettling, this::drawInk);
             if (zoomAnimator == null && raster.ready()) zoomSettling = false;
         }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
@@ -499,7 +499,12 @@ public final class CanvasView extends View {
             invalidate();
         });
         animation.addListener(new AnimatorListenerAdapter() {
+            private boolean canceled;
+
+            @Override public void onAnimationCancel(Animator ended) { canceled = true; }
+
             @Override public void onAnimationEnd(Animator ended) {
+                if (raster != null) raster.endZoom(!canceled);
                 zoomAnimator = null;
                 zoomPreview = null;
                 changed.run();
@@ -508,10 +513,17 @@ public final class CanvasView extends View {
         });
         zoomSettling = true;
         if (Build.VERSION.SDK_INT >= 29) {
+            if (raster == null) raster = new AsyncInkTiles(this::postInvalidateOnAnimation);
+            raster.prepareZoom(ink, cameraAt(targetX, targetY, 1));
             zoomPreview = new ZoomPreview(targetX, targetY, Math.min(1, ink.view.scale), offsetX, offsetY);
         }
         zoomAnimator = animation;
         animation.start();
+    }
+
+    private AsyncInkTiles.Camera cameraAt(double x, double y, double scale) {
+        return new AsyncInkTiles.Camera(getWidth(), getHeight(), x, y, scale,
+                getResources().getDisplayMetrics().density);
     }
 
     @android.annotation.TargetApi(29)

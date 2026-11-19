@@ -26,6 +26,8 @@ final class AsyncInkTiles {
     };
     private final ArrayList<Op> ops = new ArrayList<>();
     private Phase phase, previous;
+    private Phase zoomTarget;
+    private Camera zoomCamera;
     private Camera camera;
     private Ink document;
     private Ink.Stroke[] snapshot;
@@ -178,6 +180,7 @@ final class AsyncInkTiles {
         document = ink;
         if (seenRevision == ink.revision) return;
         seenRevision = ink.revision;
+        endZoom(false);
         epoch++;
         sequence++;
         snapshot = null;
@@ -213,6 +216,7 @@ final class AsyncInkTiles {
     }
 
     private void dirty(double left, double top, double right, double bottom, boolean drawModel) {
+        endZoom(false);
         snapshot = null;
         previous = null;
         if (phase == null) return;
@@ -262,6 +266,52 @@ final class AsyncInkTiles {
             }
         }
         pump();
+    }
+
+    void prepareZoom(Ink ink, Camera targetCamera) {
+        if (ink.strokes.isEmpty()) return;
+        document = ink;
+        if (seenRevision < 0) seenRevision = ink.revision;
+        zoomCamera = targetCamera;
+        zoomTarget = new Phase(targetCamera);
+        Range visible = new Range(zoomTarget, targetCamera, 0);
+        zoomTarget.visible = zoomTarget.nearby = visible;
+        for (int row = visible.top; row <= visible.bottom; row++) {
+            for (int col = visible.left; col <= visible.right; col++) zoomTarget.add(col, row, sequence);
+        }
+        pump();
+    }
+
+    void endZoom(boolean useTarget) {
+        if (zoomTarget == null) return;
+        if (useTarget) {
+            phase = zoomTarget;
+            camera = zoomCamera;
+            previous = null;
+        }
+        zoomTarget = null;
+        zoomCamera = null;
+    }
+
+    void drawZoom(Canvas canvas, Camera current, Runnable drawPreview) {
+        if (zoomTarget == null) {
+            drawPreview.run();
+            return;
+        }
+        canvas.save();
+        for (Tile tile : zoomTarget.tiles.values()) {
+            if (tile.bitmap == null) continue;
+            canvas.clipOutRect(current.sx(tile.left), current.sy(tile.top),
+                    current.sx(tile.right), current.sy(tile.bottom));
+        }
+        drawPreview.run();
+        canvas.restore();
+        for (Tile tile : zoomTarget.tiles.values()) {
+            if (tile.bitmap == null) continue;
+            destination.set(current.sx(tile.left), current.sy(tile.top),
+                    current.sx(tile.right), current.sy(tile.bottom));
+            canvas.drawBitmap(tile.bitmap, null, destination, bitmapPaint);
+        }
     }
 
     private boolean needsNewPhase(boolean navigating) {
@@ -408,11 +458,12 @@ final class AsyncInkTiles {
     }
 
     private void pump() {
-        if (closed || busy || phase == null || document == null) return;
-        Phase target = phase;
-        Tile tile = nextTile(target);
+        Phase target = zoomTarget != null ? zoomTarget : phase;
+        if (closed || busy || target == null || document == null) return;
+        boolean preparingZoom = target == zoomTarget;
+        Tile tile = nextTile(target, preparingZoom ? zoomCamera : camera, preparingZoom);
         if (tile == null) {
-            pruneOps();
+            if (!preparingZoom) pruneOps();
             return;
         }
         busy = true;
@@ -430,14 +481,15 @@ final class AsyncInkTiles {
             }
             main.post(() -> {
                 busy = false;
-                if (!closed && phase == target && epoch == generation && target.tiles.get(tile.key()) == tile) {
+                if (!closed && (phase == target || zoomTarget == target) && epoch == generation
+                        && target.tiles.get(tile.key()) == tile) {
                     if (tile.bitmap != null) target.bitmapCount--;
                     tile.bitmap = bitmap;
                     tile.sequence = revision;
                     if (bitmap != null) target.bitmapCount++;
                     trimBitmaps(target);
                     if (target.visible.contains(tile)) invalidate.run();
-                    pruneOps();
+                    if (phase == target) pruneOps();
                 } else if (bitmap != null) {
                     bitmap.recycle();
                 }
@@ -446,18 +498,18 @@ final class AsyncInkTiles {
         });
     }
 
-    private Tile nextTile(Phase target) {
+    private Tile nextTile(Phase target, Camera priority, boolean visibleOnly) {
         Tile visible = null;
         double visibleDistance = Double.POSITIVE_INFINITY;
         for (Tile tile : target.tiles.values()) {
             if (!tile.needsRender() || !target.visible.contains(tile)) continue;
-            double distance = distance(tile);
+            double distance = distance(tile, priority);
             if (distance < visibleDistance) {
                 visible = tile;
                 visibleDistance = distance;
             }
         }
-        if (visible != null) return visible;
+        if (visible != null || visibleOnly) return visible;
         boolean hasRoom = target.bitmapCount < bitmapLimit(target);
         if (hasRoom && !target.haloIndexed) {
             for (int row = target.nearby.top; row <= target.nearby.bottom; row++) {
@@ -473,7 +525,7 @@ final class AsyncInkTiles {
         double nearestDistance = Double.POSITIVE_INFINITY;
         for (Tile tile : target.tiles.values()) {
             if (!tile.needsRender() || (!hasRoom && tile.bitmap == null)) continue;
-            double distance = distance(tile);
+            double distance = distance(tile, priority);
             if (distance < nearestDistance) {
                 nearest = tile;
                 nearestDistance = distance;
@@ -482,9 +534,9 @@ final class AsyncInkTiles {
         return nearest;
     }
 
-    private double distance(Tile tile) {
-        double x = ((tile.left + tile.right) / 2 - camera.x) * camera.scale / camera.width;
-        double y = ((tile.top + tile.bottom) / 2 - camera.y) * camera.scale / camera.height;
+    private double distance(Tile tile, Camera priority) {
+        double x = ((tile.left + tile.right) / 2 - priority.x) * priority.scale / priority.width;
+        double y = ((tile.top + tile.bottom) / 2 - priority.y) * priority.scale / priority.height;
         return x * x + y * y;
     }
 
@@ -500,7 +552,7 @@ final class AsyncInkTiles {
             double maxDistance = -1;
             for (Tile tile : target.tiles.values()) {
                 if (tile.bitmap == null || target.visible.contains(tile)) continue;
-                double distance = distance(tile);
+                double distance = distance(tile, camera);
                 if (distance > maxDistance) {
                     farthest = tile;
                     maxDistance = distance;
@@ -542,7 +594,7 @@ final class AsyncInkTiles {
     void close() {
         closed = true;
         worker.shutdownNow();
-        phase = previous = null;
+        phase = previous = zoomTarget = null;
         ops.clear();
     }
 

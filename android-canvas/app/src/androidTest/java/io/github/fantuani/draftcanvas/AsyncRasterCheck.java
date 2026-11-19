@@ -79,9 +79,45 @@ final class AsyncRasterCheck {
             Thread.sleep(260); // Let the palm-rejection interval after the test pen gesture expire.
             checkDoubleTapZoom(runner, view, target, .5);
             checkDoubleTapZoom(runner, view, target, 2);
+            checkZoomPrewarm(runner);
             runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load, selection release before and after tile rebuild\n");runner.finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}
         finally{if(hardware!=null){GpuTarget target=hardware;runner.runOnMainSync(target::close);}if(holder.get()!=null)runner.runOnMainSync(holder.get()::closeRaster);}
+    }
+
+    private static void checkZoomPrewarm(Instrumentation runner) throws Exception {
+        Ink ink = new Ink();
+        int expectedInk = 0xff3169ca;
+        int previewInk = 0xffcf4941;
+        ink.add(new Ink.Stroke(ink.nextId(), expectedInk, 30, 250, 250, new float[]{0,0,1}));
+        AsyncInkTiles cache = new AsyncInkTiles(() -> {});
+        AsyncInkTiles.Camera target = new AsyncInkTiles.Camera(512, 512, 250, 250, 1, 2);
+        AsyncInkTiles.Camera animated = new AsyncInkTiles.Camera(512, 512, 250, 250, .75, 2);
+        Bitmap image = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(image);
+        try {
+            runner.runOnMainSync(() -> cache.prepareZoom(ink, target));
+            long deadline = SystemClock.uptimeMillis() + 4000;
+            do {
+                runner.runOnMainSync(() -> {
+                    image.eraseColor(Color.WHITE);
+                    cache.drawZoom(canvas, animated, () -> canvas.drawColor(previewInk));
+                });
+                if (image.getPixel(256, 256) == expectedInk) break;
+                Thread.sleep(8);
+            } while (SystemClock.uptimeMillis() < deadline);
+            check(image.getPixel(256, 256) == expectedInk,
+                    "the final-resolution tile must be available before finishing the animation");
+            runner.runOnMainSync(() -> {
+                cache.endZoom(true);
+                image.eraseColor(Color.WHITE);
+                cache.draw(canvas, ink, target, false, false, (c, l, t, r, b) -> {});
+            });
+            check(image.getPixel(256, 256) == expectedInk, "final view must reuse the prefetched tile");
+        } finally {
+            runner.runOnMainSync(cache::close);
+            image.recycle();
+        }
     }
 
     private static void checkDoubleTapZoom(Instrumentation runner, CanvasView view, GpuTarget target, double scale)
