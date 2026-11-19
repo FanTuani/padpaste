@@ -548,13 +548,15 @@ public final class CanvasView extends View {
             double right = centerX + halfWidth, bottom = centerY + halfHeight;
             Canvas layer = inkLayer.beginRecording();
             try {
-                for (Ink.Stroke stroke : ink.strokes) {
-                    if (!stroke.intersects(left, top, right, bottom)) continue;
-                    layer.save();
-                    layer.translate((float) ((stroke.x - left) * scale), (float) ((stroke.y - top) * scale));
-                    layer.scale((float) scale, (float) scale);
-                    drawStrokeShape(layer, stroke, left - stroke.x, top - stroke.y, right - stroke.x, bottom - stroke.y);
-                    layer.restore();
+                if (raster == null || !raster.recordZoomPreview(layer, ink, left, top, scale, width, height)) {
+                    for (Ink.Stroke stroke : ink.strokes) {
+                        if (!stroke.intersects(left, top, right, bottom)) continue;
+                        layer.save();
+                        layer.translate((float) ((stroke.x - left) * scale), (float) ((stroke.y - top) * scale));
+                        layer.scale((float) scale, (float) scale);
+                        drawStrokeShape(layer, stroke, left - stroke.x, top - stroke.y, right - stroke.x, bottom - stroke.y);
+                        layer.restore();
+                    }
                 }
             } finally {
                 inkLayer.endRecording();

@@ -371,10 +371,40 @@ final class AsyncInkTiles {
     }
 
     private boolean containsInk(Tile tile) {
+        return containsInk(tile.left, tile.top, tile.right, tile.bottom);
+    }
+
+    private boolean containsInk(double left, double top, double right, double bottom) {
         for (Ink.Stroke stroke : document.strokes) {
-            if (stroke.intersects(tile.left, tile.top, tile.right, tile.bottom)) return true;
+            if (stroke.intersects(left, top, right, bottom)) return true;
         }
         return false;
+    }
+
+    boolean recordZoomPreview(Canvas canvas, Ink ink, double left, double top, double scale,
+                              int width, int height) {
+        if (phase == null || phase.scale != scale || seenRevision != ink.revision || !ops.isEmpty()) return false;
+        int firstCol = phase.column(left), firstRow = phase.row(top);
+        int lastCol = phase.column(left + width / scale), lastRow = phase.row(top + height / scale);
+        for (int row = firstRow; row <= lastRow; row++) {
+            for (int col = firstCol; col <= lastCol; col++) {
+                Tile tile = phase.get(col, row);
+                if (tile != null && !tile.needsRender()) continue;
+                double x = phase.left + col * phase.span, y = phase.top + row * phase.span;
+                if (containsInk(x, y, x + phase.span, y + phase.span)
+                        || (tile != null && tile.bitmap != null)) return false;
+            }
+        }
+        for (int row = firstRow; row <= lastRow; row++) {
+            for (int col = firstCol; col <= lastCol; col++) {
+                Tile tile = phase.get(col, row);
+                if (tile == null || tile.bitmap == null) continue;
+                destination.set((float) ((tile.left - left) * scale), (float) ((tile.top - top) * scale),
+                        (float) ((tile.right - left) * scale), (float) ((tile.bottom - top) * scale));
+                canvas.drawBitmap(tile.bitmap, null, destination, bitmapPaint);
+            }
+        }
+        return true;
     }
 
     private void pump() {
