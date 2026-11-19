@@ -134,6 +134,18 @@ public final class CanvasView extends View {
 
     boolean hasSelectionBox() { return selectionBox != null; }
 
+    void dismissSelectionOutside(float x, float y) {
+        if (selectionBox != null && !selectionBox.contains(wx(x), wy(y)) && !hitsResizeHandle(x, y)) {
+            clearSelection();
+        }
+    }
+
+    private boolean hitsResizeHandle(float x, float y) {
+        float hit = dp(RESIZE_HANDLE_DP / 2 + 4);
+        return !ink.selected.isEmpty() && Math.abs(x - screenX(selectionBox.right)) <= hit
+                && Math.abs(y - screenY(selectionBox.bottom)) <= hit;
+    }
+
     void clearSelection() {
         if (marquee || selectionContact) {
             ignoredPenId = penId;
@@ -330,10 +342,7 @@ public final class CanvasView extends View {
         erasing=temporaryEraser||mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER;
         if(erasing){ink.begin();erasePoint=false;erase(startX,startY,e.getPressure(i));return;}
         if (selectionBox != null) {
-            float hit = dp(RESIZE_HANDLE_DP / 2 + 4);
-            resizeContact = !ink.selected.isEmpty()
-                    && Math.abs(lastX - screenX(selectionBox.right)) <= hit
-                    && Math.abs(lastY - screenY(selectionBox.bottom)) <= hit;
+            resizeContact = hitsResizeHandle(lastX, lastY);
             selectionContact = resizeContact || selectionBox.contains(startX, startY);
             if (!selectionContact) {
                 discardSelection();

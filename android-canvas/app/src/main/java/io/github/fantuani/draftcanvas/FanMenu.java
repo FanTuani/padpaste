@@ -30,6 +30,7 @@ final class FanMenu extends ViewGroup {
     interface Actions {
         void color(int color);
         void command(int id);
+        void penOutside(float x, float y);
     }
 
     private final Actions actions;
@@ -367,6 +368,7 @@ final class FanMenu extends ViewGroup {
                 }
             }
             dismiss(true);
+            if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) actions.penOutside(x, y);
             return true;
         }
         super.dispatchTouchEvent(event);
