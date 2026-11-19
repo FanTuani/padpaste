@@ -37,8 +37,6 @@ final class AsyncInkTiles {
     private long sequence, epoch, seenRevision = -1;
     private BitmapShader paper;
     private final Matrix shaderMatrix = new Matrix();
-    private double paperStep, patternScale;
-    private float patternDensity;
 
     AsyncInkTiles(Runnable invalidate) {
         this.invalidate = invalidate;
@@ -330,19 +328,14 @@ final class AsyncInkTiles {
 
     private void updatePaperShader() {
         if (camera.scale < CanvasView.MIN_GRID_SCALE) return;
-        double step = camera.density * 32;
-        while (step * camera.scale < camera.density * 22) step *= 2;
-        while (step * camera.scale > camera.density * 60) step /= 2;
-        if (paper == null || step != paperStep || patternScale != camera.scale || patternDensity != camera.density) {
-            paperStep = step;
-            patternScale = camera.scale;
-            patternDensity = camera.density;
+        double step = camera.density * CanvasView.GRID_STEP_DP;
+        if (paper == null) {
             Bitmap pattern = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(pattern);
             c.drawColor(CanvasView.PAPER_COLOR);
             Paint dots = new Paint(Paint.ANTI_ALIAS_FLAG);
             dots.setColor(0xFFB9C4BC);
-            float radius = (float) (camera.density * .8 / camera.scale * 128 / step);
+            float radius = CanvasView.GRID_DOT_DP / 2 / CanvasView.GRID_STEP_DP * 128;
             c.drawCircle(0, 0, radius, dots);
             c.drawCircle(0, 128, radius, dots);
             c.drawCircle(128, 0, radius, dots);

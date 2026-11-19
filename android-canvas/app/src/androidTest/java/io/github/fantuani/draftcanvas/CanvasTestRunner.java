@@ -23,17 +23,24 @@ public final class CanvasTestRunner extends Instrumentation {
         Ink ink = new Ink();
         CanvasView view = new CanvasView(getTargetContext(), ink);
         new android.widget.FrameLayout(getTargetContext()).addView(view);
-        view.layout(0, 0, 160, 160);
+        view.layout(0, 0, 512, 512);
         view.width = 12;
-        Bitmap image = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888);
+        Bitmap image = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888);
         try {
             Canvas frame = new Canvas(image);
             ink.view.scale = .69;
             view.draw(frame);
-            check(image.getPixel(79, 79) == CanvasView.PAPER_COLOR, "dots must hide below 70%");
+            check(image.getPixel(255, 255) == CanvasView.PAPER_COLOR, "dots must hide below 70%");
             ink.view.scale = .70;
             view.draw(frame);
-            check(image.getPixel(79, 79) != CanvasView.PAPER_COLOR, "dots must remain visible at 70%");
+            check(image.getPixel(255, 255) != CanvasView.PAPER_COLOR, "dots must remain visible at 70%");
+            ink.view.scale = 2;
+            view.draw(frame);
+            float baseSpacing = CanvasView.GRID_STEP_DP * view.getResources().getDisplayMetrics().density;
+            check(image.getPixel(Math.round(256 + baseSpacing) - 1, 255) == CanvasView.PAPER_COLOR,
+                    "grid must not insert intermediate dots at 200%");
+            check(image.getPixel(Math.round(256 + 2 * baseSpacing) - 1, 255) != CanvasView.PAPER_COLOR,
+                    "grid spacing must grow with the zoom");
             for (double scale : new double[]{.5, 1, 2}) {
                 ink.view.scale = scale;
                 pen(view, MotionEvent.ACTION_DOWN, 40, 80);

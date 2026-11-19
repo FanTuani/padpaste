@@ -14,6 +14,8 @@ public final class CanvasView extends View {
     public static final int PEN=0,SELECT=1,ERASE=2;
     static final double MIN_GRID_SCALE = .70;
     static final int PAPER_COLOR = 0xfffafaf7;
+    static final float GRID_STEP_DP = 32f;
+    static final float GRID_DOT_DP = 1.6f;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     public Runnable changed=()->{};
@@ -210,16 +212,26 @@ public final class CanvasView extends View {
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
     private void drawGrid(android.graphics.Canvas c){
         if (ink.view.scale < MIN_GRID_SCALE) return;
+        float diameter = (float) (dp(GRID_DOT_DP) * ink.view.scale);
         if(gridPoints==null||gridX!=ink.view.x||gridY!=ink.view.y||gridScale!=ink.view.scale||gridWidth!=getWidth()||gridHeight!=getHeight()){
             gridX=ink.view.x;gridY=ink.view.y;gridScale=ink.view.scale;gridWidth=getWidth();gridHeight=getHeight();
-            double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
-            double pixels=step*ink.view.scale;float x0=(float)((getWidth()/2.0-((ink.view.x%step)+step)%step*ink.view.scale)%pixels),y0=(float)((getHeight()/2.0-((ink.view.y%step)+step)%step*ink.view.scale)%pixels);
+            double step = dp(GRID_STEP_DP), pixels = step * ink.view.scale;
+            float radius = diameter / 2;
+            double originX = getWidth() / 2.0 - (ink.view.x % step) * ink.view.scale;
+            double originY = getHeight() / 2.0 - (ink.view.y % step) * ink.view.scale;
+            float firstX = (float) (originX - Math.floor((originX + radius) / pixels) * pixels);
+            float firstY = (float) (originY - Math.floor((originY + radius) / pixels) * pixels);
             int capacity = ((int)Math.ceil(getWidth()/pixels)+2)*((int)Math.ceil(getHeight()/pixels)+2)*2;
             if (gridPoints == null || gridPoints.length < capacity) gridPoints = new float[capacity];
-            gridCount=0;
-            for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels){gridPoints[gridCount++]=x;gridPoints[gridCount++]=y;}
+            gridCount = 0;
+            for (float x = firstX; x < getWidth() + radius; x += pixels) {
+                for (float y = firstY; y < getHeight() + radius; y += pixels) {
+                    gridPoints[gridCount++] = x;
+                    gridPoints[gridCount++] = y;
+                }
+            }
         }
-        paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeWidth(dp(1.6f));paint.setColor(0xFFB9C4BC);c.drawPoints(gridPoints,0,gridCount,paint);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeWidth(diameter);paint.setColor(0xFFB9C4BC);c.drawPoints(gridPoints,0,gridCount,paint);
     }
     private Path sectionPath(StrokeData data,double start,double end){
         Path path=new Path();path.moveTo(data.coordinate(start,0),data.coordinate(start,1));
