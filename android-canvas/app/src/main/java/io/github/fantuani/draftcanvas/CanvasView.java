@@ -514,7 +514,7 @@ public final class CanvasView extends View {
         }
         if (action == MotionEvent.ACTION_DOWN) {
             boolean finger = e.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER;
-            navigationBlocked = finger && penHasPriority(e.getEventTime());
+            navigationBlocked = finger && (penHasPriority(e.getEventTime()) || PalmContact.isWide(e));
             if (!navigationBlocked) stopZoomAnimation();
             fingerTap = finger && !navigationBlocked;
             if (!fingerTap) lastTapTime = -1;
@@ -557,7 +557,8 @@ public final class CanvasView extends View {
         if (Build.VERSION.SDK_INT >= 33 && action == MotionEvent.ACTION_POINTER_UP
                 && (e.getFlags() & MotionEvent.FLAG_CANCELED) != 0) blockNavigation();
         // A hand still resting on the glass cannot become a new gesture just because the pen lifted.
-        if (navigationBlocked || penHasPriority(e.getEventTime())) {
+        if (navigationBlocked || penHasPriority(e.getEventTime())
+                || (action != MotionEvent.ACTION_DOWN && PalmContact.isWide(e))) {
             if (!navigationBlocked) blockNavigation();
             return true;
         }

@@ -18,11 +18,43 @@ public final class CanvasTestRunner extends Instrumentation {
         mixedEvent(view, tools, action, xy);
     }
     private void mixedEvent(CanvasView view, int[] tools, int action, float... xy) {
+        touchEvent(view, tools, 0, .1f, action, xy);
+    }
+    private void touchEvent(CanvasView view, int[] tools, int deviceId, float size, int action, float... xy) {
         int n=xy.length/2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[n];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[n];
-        for(int i=0;i<n;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=tools[i];coords[i]=new MotionEvent.PointerCoords();coords[i].x=xy[i*2];coords[i].y=xy[i*2+1];coords[i].pressure=pressure;coords[i].size=.1f;}
-        MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,0,0,tools[0]==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT||action==MotionEvent.ACTION_HOVER_MOVE)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
+        for(int i=0;i<n;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=tools[i];coords[i]=new MotionEvent.PointerCoords();coords[i].x=xy[i*2];coords[i].y=xy[i*2+1];coords[i].pressure=pressure;coords[i].size=size;}
+        MotionEvent e=MotionEvent.obtain(time,time+=16,action,n,properties,coords,0,0,1,1,deviceId,0,tools[0]==MotionEvent.TOOL_TYPE_FINGER?InputDevice.SOURCE_TOUCHSCREEN:InputDevice.SOURCE_STYLUS,0);if(action==MotionEvent.ACTION_HOVER_ENTER||action==MotionEvent.ACTION_HOVER_EXIT||action==MotionEvent.ACTION_HOVER_MOVE)view.onHoverEvent(e);else view.dispatchTouchEvent(e);e.recycle();
     }
     private void pen(CanvasView v,int action,float x,float y){event(v,MotionEvent.TOOL_TYPE_STYLUS,action,x,y);}
+
+    private void checkWideContactBeforePen() {
+        if (!"liuqin".equals(Build.DEVICE)) return;
+        int deviceId = java.util.Arrays.stream(InputDevice.getDeviceIds()).filter(id -> {
+            InputDevice device = InputDevice.getDevice(id);
+            return device != null && PalmContact.TOUCHSCREEN.equals(device.getName());
+        }).findFirst().orElseThrow(() -> new AssertionError("Pad 6 Pro touchscreen is missing"));
+        CanvasView view = new CanvasView(getTargetContext(), new Ink());
+        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        view.layout(0, 0, 1440, 870);
+        Viewport viewport = view.ink.view;
+        int finger = MotionEvent.TOOL_TYPE_FINGER;
+        int[] one = {finger}, two = {finger, finger};
+        int second = 1 << MotionEvent.ACTION_POINTER_INDEX_SHIFT;
+        float tip = 6f / 255, palm = 13f / 255;
+        touchEvent(view, one, deviceId, palm, MotionEvent.ACTION_DOWN, 600, 600);
+        touchEvent(view, two, deviceId, palm, MotionEvent.ACTION_POINTER_DOWN | second, 600, 600, 780, 600);
+        touchEvent(view, two, deviceId, tip, MotionEvent.ACTION_MOVE, 550, 600, 840, 600);
+        touchEvent(view, two, deviceId, tip, MotionEvent.ACTION_POINTER_UP | second, 550, 600, 840, 600);
+        touchEvent(view, one, deviceId, tip, MotionEvent.ACTION_UP, 550, 600);
+        check(viewport.x == 0 && viewport.scale == 1, "a palm before pen detection must not pan or zoom");
+
+        touchEvent(view, one, deviceId, tip, MotionEvent.ACTION_DOWN, 600, 600);
+        touchEvent(view, one, deviceId, tip, MotionEvent.ACTION_MOVE, 660, 600);
+        check(viewport.x == -60, "the measured fingertip size must still pan");
+        touchEvent(view, one, deviceId, palm, MotionEvent.ACTION_MOVE, 680, 600);
+        check(viewport.x == 0, "a contact that grows into a palm must roll back navigation");
+        touchEvent(view, one, deviceId, tip, MotionEvent.ACTION_UP, 680, 600);
+    }
 
     private void checkPalmRejection() {
         Ink ink = new Ink();
@@ -184,6 +216,7 @@ public final class CanvasTestRunner extends Instrumentation {
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
             root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);
             Ink d=v.ink;time=SystemClock.uptimeMillis();
+            checkWideContactBeforePen();
             checkPalmRejection();
             checkGridAndPenWidth();
             checkLiveTip(v);
