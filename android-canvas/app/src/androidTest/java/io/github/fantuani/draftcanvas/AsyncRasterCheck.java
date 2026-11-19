@@ -77,28 +77,45 @@ final class AsyncRasterCheck {
             image.recycle();
             checkSelectionMove(runner, view, target);
             Thread.sleep(260); // Let the palm-rejection interval after the test pen gesture expire.
-            checkDoubleTapZoom(runner, view, .5);
-            checkDoubleTapZoom(runner, view, 2);
+            checkDoubleTapZoom(runner, view, target, .5);
+            checkDoubleTapZoom(runner, view, target, 2);
             runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load, selection release before and after tile rebuild\n");runner.finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e);runner.finish(Activity.RESULT_CANCELED,result);}
         finally{if(hardware!=null){GpuTarget target=hardware;runner.runOnMainSync(target::close);}if(holder.get()!=null)runner.runOnMainSync(holder.get()::closeRaster);}
     }
 
-    private static void checkDoubleTapZoom(Instrumentation runner, CanvasView view, double scale)
+    private static void checkDoubleTapZoom(Instrumentation runner, CanvasView view, GpuTarget target, double scale)
             throws Exception {
         float tapX = 1000, tapY = 700;
         double[] center = new double[2];
+        final int zoomInk = 0xff8d399e;
         runner.runOnMainSync(() -> {
             Viewport viewport = view.ink.view;
             viewport.scale = scale;
             center[0] = viewport.worldX(tapX, view.getWidth());
             center[1] = viewport.worldY(tapY, view.getHeight());
+            view.ink.add(new Ink.Stroke(view.ink.nextId(), zoomInk, 30,
+                    center[0], center[1], new float[]{0,0,1}));
+            view.refresh();
             finger(view, MotionEvent.ACTION_DOWN, tapX, tapY);
             finger(view, MotionEvent.ACTION_UP, tapX, tapY);
             check(viewport.scale == scale, "a single tap changed the zoom");
             finger(view, MotionEvent.ACTION_DOWN, tapX, tapY);
             finger(view, MotionEvent.ACTION_UP, tapX, tapY);
         });
+        int[] pixel = new int[2];
+        runner.runOnMainSync(() -> {
+            Viewport viewport = view.ink.view;
+            pixel[0] = (int) Math.round((center[0] - viewport.x) * viewport.scale + view.getWidth() / 2.0);
+            pixel[1] = (int) Math.round((center[1] - viewport.y) * viewport.scale + view.getHeight() / 2.0);
+            record(view, target);
+        });
+        Bitmap frame = copy(runner, target);
+        try {
+            check(frame.getPixel(pixel[0], pixel[1]) == zoomInk, "zoom preview lost the ink under the tap");
+        } finally {
+            frame.recycle();
+        }
         long deadline = SystemClock.uptimeMillis() + 2000;
         boolean[] finished = {false};
         do {

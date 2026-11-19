@@ -21,6 +21,7 @@ public final class CanvasView extends View {
     private float lastTapX, lastTapY;
     private ValueAnimator zoomAnimator;
     private boolean zoomSettling;
+    private ZoomPreview zoomPreview;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final class SectionKey {
         final double a,b;SectionKey(double a,double b){this.a=a;this.b=b;}
@@ -167,7 +168,9 @@ public final class CanvasView extends View {
     public void refresh(){if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
-        if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
+        if (Build.VERSION.SDK_INT >= 29 && c.isHardwareAccelerated() && zoomPreview != null) {
+            zoomPreview.draw(c);
+        } else if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
             if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
             raster.draw(c,ink,new AsyncInkTiles.Camera(getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,getResources().getDisplayMetrics().density), fingers || zoomAnimator != null, zoomSettling, this::drawInk);
             if (zoomAnimator == null && raster.ready()) zoomSettling = false;
@@ -208,7 +211,9 @@ public final class CanvasView extends View {
             gridX=ink.view.x;gridY=ink.view.y;gridScale=ink.view.scale;gridWidth=getWidth();gridHeight=getHeight();
             double step=dp(32);while(step*ink.view.scale<dp(22))step*=2;while(step*ink.view.scale>dp(60))step/=2;
             double pixels=step*ink.view.scale;float x0=(float)((getWidth()/2.0-((ink.view.x%step)+step)%step*ink.view.scale)%pixels),y0=(float)((getHeight()/2.0-((ink.view.y%step)+step)%step*ink.view.scale)%pixels);
-            gridPoints=new float[((int)Math.ceil(getWidth()/pixels)+2)*((int)Math.ceil(getHeight()/pixels)+2)*2];gridCount=0;
+            int capacity = ((int)Math.ceil(getWidth()/pixels)+2)*((int)Math.ceil(getHeight()/pixels)+2)*2;
+            if (gridPoints == null || gridPoints.length < capacity) gridPoints = new float[capacity];
+            gridCount=0;
             for(float x=x0;x<getWidth();x+=pixels)for(float y=y0;y<getHeight();y+=pixels){gridPoints[gridCount++]=x;gridPoints[gridCount++]=y;}
         }
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeWidth(dp(1.6f));paint.setColor(0xFFB9C4BC);c.drawPoints(gridPoints,0,gridCount,paint);
@@ -233,9 +238,13 @@ public final class CanvasView extends View {
     }
     private void drawStroke(android.graphics.Canvas c,Ink.Stroke s,double dx,double dy,double l,double t,double r,double b){
         c.save();c.translate(screenX(s.x+dx),screenY(s.y+dy));c.scale((float)ink.view.scale,(float)ink.view.scale);
+        drawStrokeShape(c, s, l, t, r, b);
+        c.restore();
+    }
+    private void drawStrokeShape(Canvas c, Ink.Stroke s, double l, double t, double r, double b) {
         setStrokePaint(s.color, s.width);
         if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
-        else {StrokeData data=s.data();drawSections(c,s,data,data.root,l,t,r,b);}c.restore();
+        else {StrokeData data=s.data();drawSections(c,s,data,data.root,l,t,r,b);}
     }
     private void setStrokePaint(int color, float width) {
         paint.setColor(color);
@@ -488,17 +497,70 @@ public final class CanvasView extends View {
             ink.view.x = targetX - remaining * offsetX / ink.view.scale;
             ink.view.y = targetY - remaining * offsetY / ink.view.scale;
             invalidate();
-            changed.run();
         });
         animation.addListener(new AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(Animator ended) {
                 zoomAnimator = null;
+                zoomPreview = null;
+                changed.run();
                 postInvalidateOnAnimation();
             }
         });
         zoomSettling = true;
+        if (Build.VERSION.SDK_INT >= 29) {
+            zoomPreview = new ZoomPreview(targetX, targetY, Math.min(1, ink.view.scale), offsetX, offsetY);
+        }
         zoomAnimator = animation;
         animation.start();
+    }
+
+    @android.annotation.TargetApi(29)
+    private final class ZoomPreview {
+        private final RenderNode inkLayer = new RenderNode("double-tap-ink");
+        private final double centerX, centerY, scale, halfWidth, halfHeight;
+        private final int width, height;
+        private long recordedRevision = -1;
+
+        ZoomPreview(double centerX, double centerY, double scale, double offsetX, double offsetY) {
+            this.centerX = centerX;
+            this.centerY = centerY;
+            this.scale = scale;
+            width = (int) Math.ceil(getWidth() + 2 * Math.abs(offsetX));
+            height = (int) Math.ceil(getHeight() + 2 * Math.abs(offsetY));
+            halfWidth = width / (2 * scale);
+            halfHeight = height / (2 * scale);
+            inkLayer.setPosition(0, 0, width, height);
+        }
+
+        void draw(Canvas canvas) {
+            if (recordedRevision != ink.revision) record();
+            canvas.save();
+            canvas.translate(screenX(centerX), screenY(centerY));
+            float ratio = (float) (ink.view.scale / scale);
+            canvas.scale(ratio, ratio);
+            canvas.translate(-width / 2f, -height / 2f);
+            canvas.drawRenderNode(inkLayer);
+            canvas.restore();
+        }
+
+        private void record() {
+            double left = centerX - halfWidth, top = centerY - halfHeight;
+            double right = centerX + halfWidth, bottom = centerY + halfHeight;
+            Canvas layer = inkLayer.beginRecording();
+            try {
+                for (Ink.Stroke stroke : ink.strokes) {
+                    if (!stroke.intersects(left, top, right, bottom)) continue;
+                    layer.save();
+                    layer.translate((float) ((stroke.x - left) * scale), (float) ((stroke.y - top) * scale));
+                    layer.scale((float) scale, (float) scale);
+                    drawStrokeShape(layer, stroke, left - stroke.x, top - stroke.y, right - stroke.x, bottom - stroke.y);
+                    layer.restore();
+                }
+            } finally {
+                inkLayer.endRecording();
+            }
+            recordedRevision = ink.revision;
+        }
     }
 
     private void stopZoomAnimation() {
