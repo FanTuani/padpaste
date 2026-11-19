@@ -77,8 +77,9 @@ final class AsyncRasterCheck {
             image.recycle();
             checkSelectionMove(runner, view, target);
             Thread.sleep(260); // Let the palm-rejection interval after the test pen gesture expire.
-            checkDoubleTapZoom(runner, view, target, .5);
-            checkDoubleTapZoom(runner, view, target, 2);
+            checkDoubleTapZoom(runner, view, target, .5, 1);
+            checkDoubleTapZoom(runner, view, target, 1, 2);
+            checkDoubleTapZoom(runner, view, target, 2, 1);
             checkZoomPrewarm(runner);
             checkFastZoomFallback(runner);
             runner.runOnMainSync(view::closeRaster);result.putString("stream","PASS: async immediate erase, fresh ink order, stale tile replacement, pen undo, erase undo, camera transform, horizontal and vertical drag preview, normal paper while zoom tiles load, selection release before and after tile rebuild\n");runner.finish(Activity.RESULT_OK,result);
@@ -166,7 +167,8 @@ final class AsyncRasterCheck {
         }
     }
 
-    private static void checkDoubleTapZoom(Instrumentation runner, CanvasView view, GpuTarget target, double scale)
+    private static void checkDoubleTapZoom(Instrumentation runner, CanvasView view, GpuTarget target,
+                                           double scale, double expectedScale)
             throws Exception {
         float tapX = 1000, tapY = 700;
         double[] center = new double[2];
@@ -201,20 +203,14 @@ final class AsyncRasterCheck {
         long deadline = SystemClock.uptimeMillis() + 2000;
         boolean[] finished = {false};
         do {
-            runner.runOnMainSync(() -> finished[0] = view.ink.view.scale == 1);
+            runner.runOnMainSync(() -> finished[0] = view.ink.view.scale == expectedScale);
             if (finished[0]) break;
             Thread.sleep(16);
         } while (SystemClock.uptimeMillis() < deadline);
         runner.runOnMainSync(() -> {
-            check(finished[0], "double tap did not finish at 100%");
+            check(finished[0], "double tap did not finish at " + Math.round(expectedScale * 100) + "%");
             check(Math.abs(view.ink.view.x - center[0]) < .001
                     && Math.abs(view.ink.view.y - center[1]) < .001, "double tap did not center its world point");
-            for (int tap = 0; tap < 2; tap++) {
-                finger(view, MotionEvent.ACTION_DOWN, 900, 650);
-                finger(view, MotionEvent.ACTION_UP, 900, 650);
-            }
-            check(view.ink.view.x == center[0] && view.ink.view.y == center[1],
-                    "double tap at 100% must leave the center unchanged");
         });
     }
 

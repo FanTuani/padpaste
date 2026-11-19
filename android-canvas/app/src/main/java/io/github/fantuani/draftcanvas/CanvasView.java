@@ -490,7 +490,7 @@ public final class CanvasView extends View {
         if (lastTapTime >= 0 && interval >= 0 && interval <= ViewConfiguration.getDoubleTapTimeout()
                 && Math.hypot(x - lastTapX, y - lastTapY) <= dp(32)) {
             lastTapTime = -1;
-            zoomToActualSize(x, y);
+            animateZoomTo(x, y, ink.view.scale == 1 ? 2 : 1);
         } else {
             lastTapTime = upTime;
             lastTapX = x;
@@ -498,17 +498,17 @@ public final class CanvasView extends View {
         }
     }
 
-    private void zoomToActualSize(float x, float y) {
-        if (ink.view.scale == 1) return;
+    private void animateZoomTo(float x, float y, double targetScale) {
         double targetX = wx(x), targetY = wy(y);
-        double logScale = Math.log(ink.view.scale);
+        double startingScale = ink.view.scale;
+        double logRatio = Math.log(startingScale / targetScale);
         double offsetX = x - getWidth() / 2.0, offsetY = y - getHeight() / 2.0;
         ValueAnimator animation = ValueAnimator.ofFloat(0f, 1f);
         animation.setDuration(240);
         animation.setInterpolator(new DecelerateInterpolator(1.65f));
         animation.addUpdateListener(frame -> {
             double remaining = 1 - (float) frame.getAnimatedValue();
-            ink.view.scale = Math.exp(remaining * logScale);
+            ink.view.scale = targetScale * Math.exp(remaining * logRatio);
             ink.view.x = targetX - remaining * offsetX / ink.view.scale;
             ink.view.y = targetY - remaining * offsetY / ink.view.scale;
             invalidate();
@@ -529,8 +529,8 @@ public final class CanvasView extends View {
         zoomSettling = true;
         if (Build.VERSION.SDK_INT >= 29) {
             if (raster == null) raster = new AsyncInkTiles(this::postInvalidateOnAnimation);
-            raster.prepareZoom(ink, cameraAt(targetX, targetY, 1));
-            zoomPreview = new ZoomPreview(targetX, targetY, Math.min(1, ink.view.scale), offsetX, offsetY);
+            raster.prepareZoom(ink, cameraAt(targetX, targetY, targetScale));
+            zoomPreview = new ZoomPreview(targetX, targetY, Math.min(startingScale, targetScale), offsetX, offsetY);
         }
         zoomAnimator = animation;
         animation.start();
