@@ -486,6 +486,7 @@ public final class CanvasView extends View {
         if(e.getToolType(0)==MotionEvent.TOOL_TYPE_STYLUS||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER){
             nearPen=e.getActionMasked()!=MotionEvent.ACTION_HOVER_EXIT;
             if (nearPen) {
+                blockNavigation();
                 hoverKnown = true;
                 hoverX = lastX = e.getX();
                 hoverY = lastY = e.getY();
@@ -495,6 +496,11 @@ public final class CanvasView extends View {
             if (displayMode() == ERASE) postInvalidateOnAnimation();
             return true;
         }return super.onHoverEvent(e);
+    }
+
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) nearPen = false;
     }
     @Override public boolean onTouchEvent(MotionEvent e){
         getParent().requestDisallowInterceptTouchEvent(true);int action=e.getActionMasked(),index=e.getActionIndex();
@@ -507,7 +513,7 @@ public final class CanvasView extends View {
         }
         if (action == MotionEvent.ACTION_DOWN) {
             boolean finger = e.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER;
-            navigationBlocked = finger && PalmContact.isWide(e);
+            navigationBlocked = finger && (nearPen || PalmContact.isWide(e));
             if (!navigationBlocked) stopZoomAnimation();
             fingerTap = finger && !navigationBlocked;
             if (!fingerTap) lastTapTime = -1;
@@ -550,7 +556,7 @@ public final class CanvasView extends View {
         if (Build.VERSION.SDK_INT >= 33 && action == MotionEvent.ACTION_POINTER_UP
                 && (e.getFlags() & MotionEvent.FLAG_CANCELED) != 0) blockNavigation();
         // Reject the rest of this contact sequence, even if the reported touch size shrinks.
-        if (navigationBlocked || (action != MotionEvent.ACTION_DOWN && PalmContact.isWide(e))) {
+        if (navigationBlocked || nearPen || (action != MotionEvent.ACTION_DOWN && PalmContact.isWide(e))) {
             if (!navigationBlocked) blockNavigation();
             return true;
         }

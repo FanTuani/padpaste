@@ -87,10 +87,10 @@ public final class CanvasTestRunner extends Instrumentation {
         event(view, finger, MotionEvent.ACTION_DOWN, 600, 500);
         event(view, finger, MotionEvent.ACTION_MOVE, 660, 500);
         event(view, finger, MotionEvent.ACTION_UP, 660, 500);
-        check(ink.view.x < beforeHoverDrag, "a hovering pen must not block a single-finger drag");
+        check(ink.view.x == beforeHoverDrag, "a hovering pen must block a single-finger drag");
         beginPinch(view, 1);
         movePinch(view, 150);
-        check(Math.abs(ink.view.scale - 1.5) < .001, "hover alone must not block a fresh finger gesture");
+        check(ink.view.scale == 1, "a hovering pen must block a pinch");
         endPinch(view, 150);
         event(view, stylus, MotionEvent.ACTION_HOVER_EXIT, 620, 400);
         pen(view, MotionEvent.ACTION_DOWN, 600, 400);
