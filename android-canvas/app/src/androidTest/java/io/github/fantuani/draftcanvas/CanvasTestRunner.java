@@ -166,6 +166,61 @@ public final class CanvasTestRunner extends Instrumentation {
         }
     }
 
+    private void checkPenPressureThreshold() {
+        Ink ink = new Ink();
+        CanvasView view = new CanvasView(getTargetContext(), ink);
+        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        view.layout(0, 0, 512, 512);
+        view.setPenPressureThreshold(200);
+        float originalPressure = pressure;
+        try {
+            pressure = 199f / 4095f;
+            pen(view, MotionEvent.ACTION_DOWN, 70, 150);
+            pen(view, MotionEvent.ACTION_UP, 90, 150);
+            check(ink.strokes.isEmpty(), "a light contact must leave no stroke");
+            pen(view, MotionEvent.ACTION_DOWN, 100, 150);
+
+            MotionEvent.PointerProperties pointer = new MotionEvent.PointerProperties();
+            pointer.toolType = MotionEvent.TOOL_TYPE_STYLUS;
+            MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
+            coords.x = 120;
+            coords.y = 150;
+            coords.pressure = 200f / 4095f;
+            MotionEvent batch = MotionEvent.obtain(time, time += 16, MotionEvent.ACTION_MOVE, 1,
+                    new MotionEvent.PointerProperties[]{pointer}, new MotionEvent.PointerCoords[]{coords},
+                    0, 0, 1, 1, 0, 0, InputDevice.SOURCE_STYLUS, 0);
+            coords.x = 170;
+            coords.pressure = pressure;
+            batch.addBatch(time += 16, new MotionEvent.PointerCoords[]{coords}, 0);
+            coords.x = 210;
+            coords.pressure = .2f;
+            batch.addBatch(time += 16, new MotionEvent.PointerCoords[]{coords}, 0);
+            view.dispatchTouchEvent(batch);
+            batch.recycle();
+            check(ink.strokes.size() == 1, "a light historical sample must commit the preceding stroke");
+            Ink.Stroke first = ink.strokes.get(0);
+            check(first.x == ink.view.worldX(120, view.getWidth()) && first.points.length == 3,
+                    "ink must start at the threshold and exclude lighter samples");
+
+            pressure = .2f;
+            pen(view, MotionEvent.ACTION_MOVE, 240, 150);
+            pressure = 0;
+            pen(view, MotionEvent.ACTION_UP, 260, 150);
+            check(ink.strokes.size() == 2, "pressure recovery must start a separate stroke");
+            Ink.Stroke second = ink.strokes.get(1);
+            check(second.x == ink.view.worldX(210, view.getWidth())
+                            && second.points[second.points.length - 3] == 30,
+                    "the light interval and light lift-off must stay out of the stroke");
+
+            view.setPenPressureThreshold(0);
+            pen(view, MotionEvent.ACTION_DOWN, 270, 150);
+            pen(view, MotionEvent.ACTION_UP, 280, 150);
+            check(ink.strokes.size() == 3, "zero threshold must accept even a zero-pressure contact");
+        } finally {
+            pressure = originalPressure;
+        }
+    }
+
     private void beginPinch(CanvasView view, double startScale) {
         view.ink.view.scale = startScale;
         int finger = MotionEvent.TOOL_TYPE_FINGER;
@@ -227,6 +282,7 @@ public final class CanvasTestRunner extends Instrumentation {
             checkPalmRejection();
             checkGridAndPenWidth();
             checkLiveTip(v);
+            checkPenPressureThreshold();
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");
             time+=1000;double x=d.view.x;event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_DOWN,400,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_MOVE,450,700);event(v,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.ACTION_UP,450,700);check(d.strokes.size()==1&&d.view.x<x,"finger must pan without ink");

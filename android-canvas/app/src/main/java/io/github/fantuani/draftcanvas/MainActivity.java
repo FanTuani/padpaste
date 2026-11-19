@@ -10,6 +10,7 @@ import java.util.*;
 
 public final class MainActivity extends Activity {
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70;
+    private static final String PEN_PRESSURE_THRESHOLD = "pen_pressure_threshold";
     CanvasView canvas;
     private DraftStore draftStore;
     private SharedPreferences toolSizes;
@@ -46,6 +47,7 @@ public final class MainActivity extends Activity {
         canvas = new CanvasView(this, ink);
         float density = getResources().getDisplayMetrics().density;
         canvas.width = toolSizes.getFloat("pen_width_dp", 2.3f) * density;
+        canvas.setPenPressureThreshold(toolSizes.getInt(PEN_PRESSURE_THRESHOLD, 0));
         canvas.setEraserSize(toolSizes.getFloat("eraser_size_dp", 24f) * density);
         canvas.eraserSensitivity = toolSizes.getFloat("eraser_sensitivity", 2f);
         root.addView(canvas, new FrameLayout.LayoutParams(-1, -1));
@@ -243,19 +245,27 @@ public final class MainActivity extends Activity {
             p.setStyle(Paint.Style.FILL);p.setColor(0x10167B70);c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);p.setStyle(Paint.Style.STROKE);p.setColor(TEAL);p.setStrokeWidth(dp(1));c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);
         }};
         panel.addView(preview,new LinearLayout.LayoutParams(-1,dp(110)));
-        panel.addView(sizeControl("笔粗细",.3f,10,.1f,canvas.width/density,value->{canvas.width=value*density;toolSizes.edit().putFloat("pen_width_dp",value).apply();preview.invalidate();}));
-        panel.addView(sizeControl("橡皮大小",6,96,1,canvas.eraserSize/density,value->{canvas.setEraserSize(value*density);toolSizes.edit().putFloat("eraser_size_dp",value).apply();preview.invalidate();}));
-        panel.addView(sizeControl("橡皮压感灵敏度",.5f,4,.1f,canvas.eraserSensitivity,value->{canvas.eraserSensitivity=value;toolSizes.edit().putFloat("eraser_sensitivity",value).apply();}));
-        new AlertDialog.Builder(this).setTitle("笔与橡皮").setView(panel).setPositiveButton("完成",null).show();
+        panel.addView(sizeControl("笔粗细",.3f,10,.1f,canvas.width/density,"%.1f",value->{canvas.width=value*density;toolSizes.edit().putFloat("pen_width_dp",value).apply();preview.invalidate();}));
+        panel.addView(sizeControl("书写力度阈值", 0, CanvasView.MAX_PEN_PRESSURE_THRESHOLD, 1,
+                toolSizes.getInt(PEN_PRESSURE_THRESHOLD, 0), "%.0f", value -> {
+                    int level = Math.round(value);
+                    canvas.setPenPressureThreshold(level);
+                    toolSizes.edit().putInt(PEN_PRESSURE_THRESHOLD, level).apply();
+                }));
+        panel.addView(sizeControl("橡皮大小",6,96,1,canvas.eraserSize/density,"%.1f",value->{canvas.setEraserSize(value*density);toolSizes.edit().putFloat("eraser_size_dp",value).apply();preview.invalidate();}));
+        panel.addView(sizeControl("橡皮压感灵敏度",.5f,4,.1f,canvas.eraserSensitivity,"%.1f",value->{canvas.eraserSensitivity=value;toolSizes.edit().putFloat("eraser_sensitivity",value).apply();}));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(panel);
+        new AlertDialog.Builder(this).setTitle("笔与橡皮").setView(scroll).setPositiveButton("完成",null).show();
     }
-    private View sizeControl(String title,float min,float max,float step,float current,java.util.function.Consumer<Float> change){
+    private View sizeControl(String title,float min,float max,float step,float current,String format,java.util.function.Consumer<Float> change){
         LinearLayout group=new LinearLayout(this);group.setOrientation(LinearLayout.VERTICAL);
-        TextView label=new TextView(this);label.setTextColor(INK);label.setTextSize(16);label.setText(title+"  "+String.format(Locale.ROOT,"%.1f",current));group.addView(label);
+        TextView label=new TextView(this);label.setTextColor(INK);label.setTextSize(16);label.setText(title+"  "+String.format(Locale.ROOT,format,current));group.addView(label);
         LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);
         SeekBar slider=new SeekBar(this);slider.setMax(Math.round((max-min)/step));slider.setProgress(Math.round((current-min)/step));slider.setContentDescription(title);slider.setProgressTintList(android.content.res.ColorStateList.valueOf(TEAL));slider.setThumbTintList(android.content.res.ColorStateList.valueOf(TEAL));
         TextView minus=action("−",()->slider.setProgress(slider.getProgress()-1)),plus=action("+",()->slider.setProgress(slider.getProgress()+1));
         row.addView(minus,new LinearLayout.LayoutParams(dp(44),dp(56)));row.addView(slider,new LinearLayout.LayoutParams(0,dp(56),1));row.addView(plus,new LinearLayout.LayoutParams(dp(44),dp(56)));group.addView(row);
-        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}public void onProgressChanged(SeekBar s,int value,boolean user){float v=min+value*step;label.setText(title+"  "+String.format(Locale.ROOT,"%.1f",v));change.accept(v);}});
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}public void onProgressChanged(SeekBar s,int value,boolean user){float v=min+value*step;label.setText(title+"  "+String.format(Locale.ROOT,format,v));change.accept(v);}});
         return group;
     }
 }

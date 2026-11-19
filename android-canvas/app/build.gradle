@@ -6,8 +6,8 @@ android {
         applicationId 'io.github.fantuani.draftcanvas'
         minSdk 26
         targetSdk 35
-        versionCode 36
-        versionName '0.1.35'
+        versionCode 37
+        versionName '0.1.36'
         testInstrumentationRunner 'io.github.fantuani.draftcanvas.CanvasTestRunner'
     }
     flavorDimensions 'device'

@@ -16,9 +16,12 @@ public final class CanvasView extends View {
     static final int PAPER_COLOR = 0xfffafaf7;
     static final float GRID_STEP_DP = 32f;
     static final float GRID_DOT_DP = 1.6f;
+    static final int MAX_PEN_PRESSURE_THRESHOLD = 200;
+    private static final float MAX_RAW_PEN_PRESSURE = 4095f;
     private static final float RESIZE_HANDLE_DP = 20f;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
+    private float penPressureThreshold;
     public Runnable changed=()->{};
     private boolean fingerTap;
     private boolean navigationBlocked;
@@ -163,6 +166,9 @@ public final class CanvasView extends View {
     }
     void invalidateErasedArea(float left,float top,float right,float bottom){if(tiles!=null)tiles.invalidate(left-2,top-2,right+2,bottom+2);}
     public void setEraserSize(float size){eraserSize=size;cursorRadius=size/2;postInvalidateOnAnimation();}
+    void setPenPressureThreshold(int level) {
+        penPressureThreshold = Math.max(0, Math.min(MAX_PEN_PRESSURE_THRESHOLD, level)) / MAX_RAW_PEN_PRESSURE;
+    }
     public void undo() {
         clearSelection();
         if (penId != -1) finishPen();
@@ -327,11 +333,11 @@ public final class CanvasView extends View {
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
     }
-    private void beginPen(MotionEvent e,int i){
+    private boolean beginPen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);lastTool=e.getToolType(i);cursorKnown=true;
         penId=e.getPointerId(i);fingers=false;startX=wx(e.getX(i));startY=wy(e.getY(i));dragX=dragY=0;
         erasing=temporaryEraser||mode==ERASE||e.getToolType(i)==MotionEvent.TOOL_TYPE_ERASER;
-        if(erasing){ink.begin();erasePoint=false;erase(startX,startY,e.getPressure(i));return;}
+        if(erasing){ink.begin();erasePoint=false;erase(startX,startY,e.getPressure(i));return false;}
         if (selectionBox != null) {
             resizeContact = hitsResizeHandle(lastX, lastY);
             selectionContact = resizeContact || selectionBox.contains(startX, startY);
@@ -340,20 +346,17 @@ public final class CanvasView extends View {
                 ignoredPenId = penId;
                 resetPenContact();
             }
-            return;
+            return false;
         }
         if (mode == SELECT) {
             marquee = true;
             lassoTrace.clear();
             lassoTrace.add(startX, startY, 0);
-            return;
+            return false;
         }
         liveStroke.clear();
-        strokeX = startX;
-        strokeY = startY;
-        strokeColor = color;
-        strokeWidth = (float) (width / ink.view.scale);
-        liveStroke.add(0, 0, ink.view.scale, strokeWidth);
+        addPenSample(startX, startY, lastPressure);
+        return true;
     }
     private boolean movePen(MotionEvent e,int i){
         lastX=e.getX(i);lastY=e.getY(i);lastPressure=e.getPressure(i);
@@ -387,14 +390,40 @@ public final class CanvasView extends View {
         else {
             boolean changed = false;
             for (int h = 0; h < e.getHistorySize(); h++) {
-                changed |= liveStroke.add((float)(wx(e.getHistoricalX(i,h)) - strokeX),
-                        (float)(wy(e.getHistoricalY(i,h)) - strokeY), ink.view.scale, strokeWidth);
+                changed |= addPenSample(wx(e.getHistoricalX(i, h)), wy(e.getHistoricalY(i, h)),
+                        e.getHistoricalPressure(i, h));
             }
-            changed |= liveStroke.add((float)(x - strokeX), (float)(y - strokeY), ink.view.scale, strokeWidth);
+            changed |= addPenSample(x, y, lastPressure);
             return changed;
         }
         return true;
     }
+    private boolean addPenSample(double x, double y, float pressure) {
+        if (pressure < penPressureThreshold) return commitLiveStroke();
+        if (liveStroke.isEmpty()) {
+            strokeX = x;
+            strokeY = y;
+            strokeColor = color;
+            strokeWidth = (float) (width / ink.view.scale);
+        }
+        return liveStroke.add((float) (x - strokeX), (float) (y - strokeY), ink.view.scale, strokeWidth);
+    }
+
+    private boolean commitLiveStroke() {
+        if (liveStroke.isEmpty()) return false;
+        Ink.Stroke stroke = new Ink.Stroke(ink.nextId(), strokeColor, strokeWidth, strokeX, strokeY,
+                liveStroke.copyPoints());
+        liveStroke.clear();
+        ink.add(stroke);
+        if (raster != null) {
+            raster.stroke(ink, stroke);
+            raster.noteRevision(ink);
+        }
+        invalidateErasedArea(screenX(stroke.left), screenY(stroke.top), screenX(stroke.right), screenY(stroke.bottom));
+        changed.run();
+        return true;
+    }
+
     private void erase(double x,double y,float pressure){
         cursorRadius=(float)(eraserSize/2*Eraser.pressureScale(pressure,eraserSensitivity));double radius=cursorRadius/ink.view.scale;
         double ax=erasePoint?eraseX:x,ay=erasePoint?eraseY:y,r=erasePoint?Math.max(radius,eraseRadius):radius;
@@ -409,7 +438,7 @@ public final class CanvasView extends View {
     void closeRaster(){if(raster!=null){raster.close();raster=null;}}
     boolean rasterReady(){return raster!=null&&raster.ready();}
     private void finishPen(){
-        boolean erased=erasing,added=false;
+        boolean erased=erasing;
         boolean tapSelection = selectionContact && !resizeContact && !dragging
                 && selectionBox.contains(wx(lastX), wy(lastY));
         boolean movedSelection = dragging;
@@ -432,16 +461,9 @@ public final class CanvasView extends View {
                 mode = PEN;
             }
         }
-        else if (!liveStroke.isEmpty()) {
-            Ink.Stroke stroke = new Ink.Stroke(ink.nextId(), strokeColor, strokeWidth, strokeX, strokeY,
-                    liveStroke.copyPoints());
-            ink.add(stroke);
-            if (raster != null) raster.stroke(ink, stroke);
-            added = true;
-            invalidateErasedArea(screenX(stroke.left), screenY(stroke.top), screenX(stroke.right), screenY(stroke.bottom));
-        }
+        else commitLiveStroke();
         resetPenContact();
-        if (erased || added) {
+        if (erased) {
             if (raster != null) raster.noteRevision(ink);
             postInvalidateOnAnimation();
             changed.run();
@@ -537,10 +559,9 @@ public final class CanvasView extends View {
             if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) {
                 blockNavigation();
                 stopZoomAnimation();
-                beginPen(e, index);
-                if (!liveStroke.isEmpty()) {
+                if (beginPen(e, index)) {
                     requestUnbufferedDispatch(e);
-                    invalidate();
+                    if (!liveStroke.isEmpty()) invalidate();
                 } else postInvalidateOnAnimation();
                 return true;
             }
