@@ -31,6 +31,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final LinearLayout prompt;
     private QuestionConnection connection;
+    private AlertDialog syncDialog;
     private QuestionConnection.Candidate candidate;
     private boolean active, connected, importing;
     private long previousId, lastImport;
@@ -79,15 +80,24 @@ final class QuestionInbox implements QuestionConnection.Listener {
         status(false);
     }
 
-    @Override public void status(boolean online) { connected = online; }
+    @Override public void status(boolean online) {
+        connected = online;
+        if (syncDialog != null) syncDialog.setTitle(syncTitle());
+    }
+
+    private String syncTitle() {
+        String state = preferences.contains(PAIRING) ? (connected ? "已连接 Mac" : "等待 Mac 连接") : "尚未配对";
+        return "同步 · " + state;
+    }
 
     void settings() {
-        String state = preferences.contains(PAIRING) ? (connected ? "已连接 Mac" : "等待 Mac 连接") : "尚未配对";
-        new AlertDialog.Builder(activity).setTitle("同步 · " + state)
+        syncDialog = new AlertDialog.Builder(activity).setTitle(syncTitle())
                 .setItems(new String[]{"平板截图 → Mac 剪贴板", "Mac 剪贴板 → 草稿纸"}, (dialog, index) -> {
                     if (index == 0) activity.startActivity(new Intent(activity, io.github.fantuani.padpaste.MainActivity.class));
                     else pairingSettings();
-                }).show();
+                }).create();
+        syncDialog.setOnDismissListener(dialog -> syncDialog = null);
+        syncDialog.show();
     }
 
     private void pairingSettings() {

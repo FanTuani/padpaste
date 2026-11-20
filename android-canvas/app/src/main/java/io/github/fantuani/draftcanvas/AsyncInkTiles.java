@@ -203,8 +203,16 @@ final class AsyncInkTiles {
         document = ink;
         seenRevision = ink.revision;
         Op op = new Op(++sequence, ax, ay, bx, by, radius);
-        ops.add(op);
-        dirty(op.left - padding, op.top - padding, op.right + padding, op.bottom + padding, false);
+        boolean overImage = false;
+        for (QuestionImage image : ink.questions) {
+            if (image.intersects(op.left, op.top, op.right, op.bottom)) {
+                overImage = true;
+                break;
+            }
+        }
+        // Paint only the surviving ink over images, so the paper-colored preview cannot cover them.
+        if (!overImage) ops.add(op);
+        dirty(op.left - padding, op.top - padding, op.right + padding, op.bottom + padding, overImage);
     }
 
     void selectionTransformed(Ink ink, double[] from, double[] to) {

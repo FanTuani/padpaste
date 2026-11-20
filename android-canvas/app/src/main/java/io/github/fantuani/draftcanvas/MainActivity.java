@@ -81,6 +81,7 @@ public final class MainActivity extends Activity {
             @Override public void command(int id) { menuCommand(id); }
             @Override public void penOutside(float x, float y) { canvas.dismissSelectionOutside(x, y); }
         });
+        menu.setElevation(dp(6));
         root.addView(menu, new FrameLayout.LayoutParams(-1, -1));
         canvas.setOnClickListener(view -> {
             PointF anchor = canvas.selectionMenuAnchor();
