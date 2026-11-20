@@ -34,6 +34,9 @@ public final class CanvasView extends View {
     private boolean zoomSettling;
     private ZoomPreview zoomPreview;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint photoPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final RectF photoBounds = new RectF();
+    QuestionAssets questionAssets;
     private static final class SectionKey {
         final double a,b;SectionKey(double a,double b){this.a=a;this.b=b;}
         @Override public boolean equals(Object other){return other instanceof SectionKey&&((SectionKey)other).a==a&&((SectionKey)other).b==b;}
@@ -181,6 +184,7 @@ public final class CanvasView extends View {
     public void refresh(){if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
+        drawQuestions(c);
         if (Build.VERSION.SDK_INT >= 29 && c.isHardwareAccelerated() && zoomPreview != null) {
             raster.drawZoom(c, cameraAt(ink.view.x, ink.view.y, ink.view.scale), () -> zoomPreview.draw(c));
         } else if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
@@ -205,6 +209,39 @@ public final class CanvasView extends View {
             paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2.5f));paint.setColor(0xE6FFFFFF);c.drawCircle(lastX,lastY,radius,paint);
             paint.setStrokeWidth(dp(1));paint.setColor(0xD9167B70);c.drawCircle(lastX,lastY,radius,paint);
         }
+    }
+
+    private void drawQuestions(Canvas canvas) {
+        if (questionAssets == null) return;
+        for (QuestionImage question : ink.questions) {
+            boolean transform = dragging && ink.selected.contains(question.id);
+            double factor = transform ? selectionScale : 1;
+            double x = transform ? selectionBox.left + (question.x - selectionBox.left) * factor + dragX : question.x;
+            double y = transform ? selectionBox.top + (question.y - selectionBox.top) * factor + dragY : question.y;
+            photoBounds.set(screenX(x), screenY(y), screenX(x + question.width * factor),
+                    screenY(y + question.height * factor));
+            if (!photoBounds.intersects(0, 0, getWidth(), getHeight())) continue;
+            Bitmap bitmap = questionAssets.visible(question.asset, this::postInvalidateOnAnimation);
+            if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
+        }
+    }
+
+    boolean canImportQuestion() {
+        return getWidth() > 0 && getHeight() > 0 && penId == -1 && !fingers && !ink.hasOpenEdit();
+    }
+
+    boolean questionVisible(QuestionImage question) {
+        return screenX(question.x) >= 0 && screenY(question.y) >= 0
+                && screenX(question.right()) <= getWidth() && screenY(question.bottom()) <= getHeight();
+    }
+
+    void locateQuestion(QuestionImage question) {
+        if (!canImportQuestion()) return;
+        stopZoomAnimation();
+        double scale = Math.min(ink.view.scale, Math.min(getWidth() * .82 / question.width,
+                getHeight() * .80 / question.height));
+        double x = question.x + question.width / 2, y = question.y + question.height / 2;
+        animateCamera(x, y, scale, (x - ink.view.x) * ink.view.scale, (y - ink.view.y) * ink.view.scale);
     }
 
     private void drawLasso(Canvas canvas) {
@@ -650,10 +687,12 @@ public final class CanvasView extends View {
     }
 
     private void animateZoomTo(float x, float y, double targetScale) {
-        double targetX = wx(x), targetY = wy(y);
+        animateCamera(wx(x), wy(y), targetScale, x - getWidth() / 2.0, y - getHeight() / 2.0);
+    }
+
+    private void animateCamera(double targetX, double targetY, double targetScale, double offsetX, double offsetY) {
         double startingScale = ink.view.scale;
         double logRatio = Math.log(startingScale / targetScale);
-        double offsetX = x - getWidth() / 2.0, offsetY = y - getHeight() / 2.0;
         ValueAnimator animation = ValueAnimator.ofFloat(0f, 1f);
         animation.setDuration(240);
         animation.setInterpolator(new DecelerateInterpolator(1.65f));
@@ -763,7 +802,13 @@ public final class CanvasView extends View {
             right = Math.max(right, stroke.right);
             bottom = Math.max(bottom, stroke.bottom);
         }
-        if (ink.strokes.isEmpty()) {
+        for (QuestionImage image : ink.questions) {
+            left = Math.min(left, image.x);
+            top = Math.min(top, image.y);
+            right = Math.max(right, image.right());
+            bottom = Math.max(bottom, image.bottom());
+        }
+        if (!ink.hasContent()) {
             ink.view.x = ink.view.y = 0;
             ink.view.scale = 1;
         } else {

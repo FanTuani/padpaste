@@ -4,6 +4,7 @@ import ImageIO
 import CryptoKit
 
 final class FastScreenshotReceiver {
+    static let tabletOrigin = NSPasteboard.PasteboardType("io.github.fantuani.padpaste.tablet-origin")
     private var listener: NWListener?
     private var discovery: NWListener?
     private let queue = DispatchQueue(label: "tablet.screenshot.receive", qos: .userInitiated)
@@ -75,6 +76,7 @@ final class FastScreenshotReceiver {
             guard let self else { respond(503, "stopped"); return }
             let item = NSPasteboardItem()
             item.setData(tiff, forType: .tiff)
+            item.setString("1", forType: Self.tabletOrigin)
             if ["jpg", "jpeg"].contains(extensionName) {
                 item.setData(body, forType: NSPasteboard.PasteboardType("public.jpeg"))
             } else if extensionName == "png" {

@@ -2,6 +2,25 @@ package io.github.fantuani.draftcanvas;
 import org.junit.Test;
 import static org.junit.Assert.*;
 public class InkTest {
+    @Test public void importedQuestionsAvoidExistingInkAndUseNormalHistory() {
+        Ink ink = new Ink();
+        ink.add(new Ink.Stroke(ink.nextId(), 0xff000000, 4, -475, -245, new float[]{0,0,1,160,0,1}));
+        QuestionImage first = ink.importQuestion("a", 600, 400, 1000, 600, 30, 0);
+        Ink.Stroke existing = ink.strokes.get(0);
+        assertFalse(first.intersects(existing.left, existing.top, existing.right, existing.bottom));
+        QuestionImage next = ink.importQuestion("b", 600, 400, 1000, 600, 30, first.id);
+        assertEquals(first.x, next.x, 0);
+        assertTrue(next.y > first.bottom());
+        ink.select(next.x - 1, next.y - 1, next.right() + 1, next.bottom() + 1);
+        ink.move(5, 9);
+        assertEquals(next.x + 5, ink.question(next.id).x, 0);
+        ink.undo();
+        assertSame(next, ink.question(next.id));
+        ink.undo();
+        assertNull(ink.question(next.id));
+        ink.redo();
+        assertSame(next, ink.question(next.id));
+    }
     private Ink.Stroke stroke(Ink d){return new Ink.Stroke(d.nextId(),0xff000000,2,100,200,new float[]{0,0,.5f,20,30,.7f});}
     @Test public void zoomKeepsFocusAndWorksAtDistantCoordinates(){Viewport v=new Viewport();v.x=1e11;v.y=-1e11;double x=v.worldX(231,1000),y=v.worldY(178,700);v.zoom(9.3,231,178,1000,700);assertEquals(x,v.worldX(231,1000),.001);assertEquals(y,v.worldY(178,700),.001);}
     @Test public void selectionMoveCopyPasteUndoIsIndependent(){Ink d=new Ink();d.add(stroke(d));d.select(90,190,140,240);d.copy();d.move(80,-20);assertEquals(180,d.strokes.get(0).x,0);d.paste(1000,700);assertEquals(2,d.strokes.size());assertEquals(124,d.strokes.get(1).x,0);d.undo();assertEquals(1,d.strokes.size());d.undo();assertEquals(100,d.strokes.get(0).x,0);d.redo();assertEquals(180,d.strokes.get(0).x,0);}

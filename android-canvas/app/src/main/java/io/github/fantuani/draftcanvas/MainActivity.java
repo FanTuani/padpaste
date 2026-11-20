@@ -10,6 +10,7 @@ import android.widget.*;
 import java.util.*;
 
 public final class MainActivity extends Activity {
+    private static final String OPEN_SYNC = "io.github.fantuani.draftcanvas.OPEN_SYNC";
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70;
     private static final String PEN_PRESSURE_THRESHOLD = "pen_pressure_threshold";
     private static final String PEN_SENSITIVITY = "pen_sensitivity";
@@ -21,6 +22,8 @@ public final class MainActivity extends Activity {
     private TextView zoom;
     private double shownScale = Double.NaN;
     private PenButtons penButtons;
+    private QuestionInbox questions;
+    private boolean resumed;
     private final Handler penHandler = new Handler(Looper.getMainLooper());
     private final Runnable lowerHold = () -> penButtons.hold(SystemClock.uptimeMillis());
     private final Runnable upperHold = () -> penButtons.holdUpper(SystemClock.uptimeMillis());
@@ -71,6 +74,8 @@ public final class MainActivity extends Activity {
             draftStore.observe();
         };
         updateZoom();
+        questions = new QuestionInbox(this, root, canvas, draftStore);
+        if (resumed) questions.start();
         menu = new FanMenu(this, new FanMenu.Actions() {
             @Override public void color(int color) { canvas.setPenColor(color); }
             @Override public void command(int id) { menuCommand(id); }
@@ -109,6 +114,19 @@ public final class MainActivity extends Activity {
             }
         });
         setContentView(root);
+        openSyncFromIntent(getIntent());
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openSyncFromIntent(intent);
+    }
+
+    private void openSyncFromIntent(Intent intent) {
+        if (questions == null || !OPEN_SYNC.equals(intent.getAction())) return;
+        intent.setAction(Intent.ACTION_MAIN);
+        questions.settings();
     }
 
     private void menuCommand(int id) {
@@ -130,7 +148,7 @@ public final class MainActivity extends Activity {
                 canvas.overview();
                 break;
             case FanMenu.SYNC:
-                startActivity(new Intent(this, io.github.fantuani.padpaste.MainActivity.class));
+                questions.settings();
                 break;
             case FanMenu.COPY:
                 ink.copy();
@@ -207,7 +225,33 @@ public final class MainActivity extends Activity {
         if (menu != null) menu.dismiss(false);
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        resumed = true;
+        if (questions != null) questions.start();
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != QuestionInbox.PICK_PAIRING || result != RESULT_OK || data == null
+                || data.getData() == null || questions == null) return;
+        try (java.io.InputStream stream = getContentResolver().openInputStream(data.getData())) {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = stream.read(buffer)) != -1) {
+                if (bytes.size() + count > 8192) throw new java.io.IOException("Pairing file too large");
+                bytes.write(buffer, 0, count);
+            }
+            questions.pair(bytes.toString("UTF-8"));
+        } catch (Exception error) {
+            Toast.makeText(this, "无法读取配对文件", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     @Override protected void onPause() {
+        resumed = false;
+        if (questions != null) questions.stop();
         if (canvas != null) canvas.settleForSave();
         resetPenButtons();
         draftStore.flush();

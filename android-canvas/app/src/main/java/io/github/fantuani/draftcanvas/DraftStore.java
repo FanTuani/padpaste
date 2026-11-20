@@ -17,7 +17,7 @@ import java.util.function.Consumer;
 /** Saves the single local draft. The canvas owns the model; one worker owns the file. */
 final class DraftStore {
     private static final int MAGIC = 0x44524146; // DRAF
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
     private static final long SAVE_DELAY_MS = 240;
     private static DraftStore instance;
 
@@ -159,6 +159,14 @@ final class DraftStore {
                     for (double limit : stroke.sections) out.writeDouble(limit);
                 }
             }
+            out.writeInt(snapshot.questions.size());
+            for (QuestionImage image : snapshot.questions) {
+                out.writeUTF(image.asset);
+                out.writeDouble(image.x);
+                out.writeDouble(image.y);
+                out.writeDouble(image.width);
+                out.writeDouble(image.height);
+            }
             out.flush();
             file.finishWrite(raw);
             return true;
@@ -183,6 +191,18 @@ final class DraftStore {
             }
             int count = count(in.readInt(), in.available() / 45);
             for (int i = 0; i < count; i++) readStroke(in, restored, version);
+            if (version >= 3) {
+                int images = count(in.readInt(), in.available() / 66);
+                for (int i = 0; i < images; i++) {
+                    String asset = in.readUTF();
+                    double x = coordinate(in.readDouble()), y = coordinate(in.readDouble());
+                    double width = coordinate(in.readDouble()), height = coordinate(in.readDouble());
+                    if (!asset.matches("[a-f0-9]{32}") || width <= 0 || height <= 0) {
+                        throw new IOException("Invalid question image");
+                    }
+                    restored.questions.add(new QuestionImage(restored.nextId(), asset, x, y, width, height));
+                }
+            }
             if (in.read() != -1) throw new IOException("Trailing draft data");
             return restored;
         } catch (FileNotFoundException firstLaunch) {
@@ -241,10 +261,12 @@ final class DraftStore {
 
     private static final class Snapshot {
         final List<Ink.Stroke> strokes;
+        final List<QuestionImage> questions;
         final double x, y, scale;
 
         Snapshot(Ink ink) {
             strokes = new ArrayList<>(ink.strokes);
+            questions = new ArrayList<>(ink.questions);
             x = ink.view.x;
             y = ink.view.y;
             scale = ink.view.scale;
