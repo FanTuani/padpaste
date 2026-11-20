@@ -182,6 +182,7 @@ final class AsyncRasterCheck {
         final int zoomInk = 0xff8d399e;
         runner.runOnMainSync(() -> {
             Viewport viewport = view.ink.view;
+            view.resetZoom();
             viewport.scale = scale;
             center[0] = viewport.worldX(tapX, view.getWidth());
             center[1] = viewport.worldY(tapY, view.getHeight());

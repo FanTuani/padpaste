@@ -31,6 +31,8 @@ public final class CanvasView extends View {
     private long lastTapTime = -1;
     private float lastTapX, lastTapY;
     private ValueAnimator zoomAnimator;
+    private boolean canReturnFromDoubleTapZoom;
+    private double beforeDoubleTapX, beforeDoubleTapY;
     private boolean zoomSettling;
     private ZoomPreview zoomPreview;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -364,11 +366,12 @@ public final class CanvasView extends View {
 
     void locateQuestion(QuestionImage question) {
         if (!canImportQuestion()) return;
+        canReturnFromDoubleTapZoom = false;
         stopZoomAnimation();
         double scale = Math.min(ink.view.scale, Math.min(getWidth() * .82 / question.width,
                 getHeight() * .80 / question.height));
         double x = question.x + question.width / 2, y = question.y + question.height / 2;
-        animateCamera(x, y, scale, (x - ink.view.x) * ink.view.scale, (y - ink.view.y) * ink.view.scale);
+        animateCenteredCamera(x, y, scale);
     }
 
     private void drawLasso(Canvas canvas) {
@@ -813,6 +816,9 @@ public final class CanvasView extends View {
             return true;
         }
         if (action == MotionEvent.ACTION_MOVE && !fingerTap) {
+            if (cx != prevX || cy != prevY || (count == 2 && distance != prevDistance)) {
+                canReturnFromDoubleTapZoom = false;
+            }
             double anchorX = wx(prevX), anchorY = wy(prevY);
             if (count == 2 && prevDistance > 1 && distance > 1) {
                 ink.view.scale = pinch.update((double) distance / prevDistance);
@@ -842,7 +848,17 @@ public final class CanvasView extends View {
         if (lastTapTime >= 0 && interval >= 0 && interval <= ViewConfiguration.getDoubleTapTimeout()
                 && Math.hypot(x - lastTapX, y - lastTapY) <= dp(32)) {
             lastTapTime = -1;
-            animateZoomTo(x, y, ink.view.scale == 1 ? 2 : 1);
+            if (canReturnFromDoubleTapZoom) {
+                canReturnFromDoubleTapZoom = false;
+                animateCenteredCamera(beforeDoubleTapX, beforeDoubleTapY, 1);
+            } else if (ink.view.scale == 1) {
+                beforeDoubleTapX = ink.view.x;
+                beforeDoubleTapY = ink.view.y;
+                canReturnFromDoubleTapZoom = true;
+                animateZoomTo(x, y, 2);
+            } else {
+                animateZoomTo(x, y, 1);
+            }
         } else {
             lastTapTime = upTime;
             lastTapX = x;
@@ -852,6 +868,10 @@ public final class CanvasView extends View {
 
     private void animateZoomTo(float x, float y, double targetScale) {
         animateCamera(wx(x), wy(y), targetScale, x - getWidth() / 2.0, y - getHeight() / 2.0);
+    }
+
+    private void animateCenteredCamera(double x, double y, double scale) {
+        animateCamera(x, y, scale, (x - ink.view.x) * ink.view.scale, (y - ink.view.y) * ink.view.scale);
     }
 
     private void animateCamera(double targetX, double targetY, double targetScale, double offsetX, double offsetY) {
@@ -951,6 +971,7 @@ public final class CanvasView extends View {
     }
 
     void resetZoom() {
+        canReturnFromDoubleTapZoom = false;
         stopZoomAnimation();
         if (ink.view.scale == 1) return;
         ink.view.scale = 1;
@@ -958,6 +979,7 @@ public final class CanvasView extends View {
     }
 
     void overview() {
+        canReturnFromDoubleTapZoom = false;
         stopZoomAnimation();
         double left = Double.POSITIVE_INFINITY, top = left, right = -left, bottom = -left;
         for (Ink.Stroke stroke : ink.strokes) {

@@ -372,6 +372,54 @@ public final class CanvasTestRunner extends Instrumentation {
         endPinch(view, releaseRadius);
     }
 
+    private void checkDoubleTapRoundTrip() throws InterruptedException {
+        java.util.concurrent.atomic.AtomicReference<CanvasView> target = new java.util.concurrent.atomic.AtomicReference<>();
+        runOnMainSync(() -> {
+            CanvasView view = new CanvasView(getTargetContext(), new Ink());
+            new android.widget.FrameLayout(getTargetContext()).addView(view);
+            view.layout(0, 0, 1080, 900);
+            view.ink.view.x = 127;
+            view.ink.view.y = -84;
+            target.set(view);
+            doubleTap(view, 720, 320);
+        });
+        CanvasView view = target.get();
+        awaitZoom(view, 2, 307, -214);
+        runOnMainSync(() -> doubleTap(view, 340, 220));
+        awaitZoom(view, 1, 127, -84);
+
+        runOnMainSync(() -> doubleTap(view, 720, 320));
+        awaitZoom(view, 2, 307, -214);
+        runOnMainSync(() -> {
+            int finger = MotionEvent.TOOL_TYPE_FINGER;
+            event(view, finger, MotionEvent.ACTION_DOWN, 300, 350);
+            event(view, finger, MotionEvent.ACTION_MOVE, 400, 450);
+            event(view, finger, MotionEvent.ACTION_UP, 400, 450);
+            doubleTap(view, 540, 450);
+        });
+        awaitZoom(view, 1, 257, -264);
+    }
+
+    private void doubleTap(CanvasView view, float x, float y) {
+        int finger = MotionEvent.TOOL_TYPE_FINGER;
+        for (int i = 0; i < 2; i++) {
+            event(view, finger, MotionEvent.ACTION_DOWN, x, y);
+            event(view, finger, MotionEvent.ACTION_UP, x, y);
+        }
+    }
+
+    private void awaitZoom(CanvasView view, double scale, double x, double y) throws InterruptedException {
+        boolean[] matches = {false};
+        long deadline = SystemClock.uptimeMillis() + 1500;
+        do {
+            runOnMainSync(() -> matches[0] = view.ink.view.scale == scale
+                    && Math.abs(view.ink.view.x - x) < .001 && Math.abs(view.ink.view.y - y) < .001);
+            if (matches[0]) return;
+            Thread.sleep(16);
+        } while (SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError("wrong viewport after double tap, expected " + scale + " at " + x + ", " + y);
+    }
+
     @android.annotation.TargetApi(29)
     private android.graphics.Bitmap snapshot(CanvasView v){
         try(GpuTarget target=new GpuTarget(v.getWidth(),v.getHeight())){
@@ -529,6 +577,7 @@ public final class CanvasTestRunner extends Instrumentation {
                     "overview must center existing ink");
             v.refresh();
         });
-        result.putString("stream","PASS: pen ink, canceled ink rejection, finger pan, lasso select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, armed selection, pen tap and drag, silent finger taps\n");finish(Activity.RESULT_OK,result);
+        checkDoubleTapRoundTrip();
+        result.putString("stream","PASS: pen ink, image selection menu and edits, double-tap zoom round trip, canceled ink rejection, finger pan, lasso select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, armed selection, pen tap and drag, silent finger taps\n");finish(Activity.RESULT_OK,result);
     }catch(Throwable e){result.putString("stream","FAIL: "+e);finish(Activity.RESULT_CANCELED,result);}}
 }
