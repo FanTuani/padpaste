@@ -37,6 +37,22 @@ public final class CanvasView extends View {
     private final Paint photoPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final RectF photoBounds = new RectF();
     QuestionAssets questionAssets;
+    private long selectedQuestionId;
+    private PhotoGesture photoGesture;
+
+    private static final class PhotoGesture {
+        final QuestionImage original;
+        final float startX, startY;
+        final boolean resize;
+        QuestionImage preview;
+
+        PhotoGesture(QuestionImage image, float x, float y, boolean resize) {
+            original = image;
+            startX = x;
+            startY = y;
+            this.resize = resize;
+        }
+    }
     private static final class SectionKey {
         final double a,b;SectionKey(double a,double b){this.a=a;this.b=b;}
         @Override public boolean equals(Object other){return other instanceof SectionKey&&((SectionKey)other).a==a&&((SectionKey)other).b==b;}
@@ -109,6 +125,7 @@ public final class CanvasView extends View {
     }
 
     void settleForSave() {
+        cancelPhotoGesture();
         stopZoomAnimation();
         lastTapTime = -1;
         finishContactForMenu();
@@ -117,6 +134,7 @@ public final class CanvasView extends View {
     void armSelection() {
         if (selectionArmed()) return;
         finishContactForMenu();
+        selectQuestion(null);
         tool(SELECT);
     }
 
@@ -125,6 +143,8 @@ public final class CanvasView extends View {
     boolean hasSelectionBox() { return selectionBox != null; }
 
     void dismissSelectionOutside(float x, float y) {
+        QuestionImage image = selectedQuestion();
+        if (image != null && !image.contains(wx(x), wy(y))) selectQuestion(null);
         if (selectionBox != null && !selectionBox.contains(wx(x), wy(y)) && !hitsResizeHandle(x, y)) {
             clearSelection();
         }
@@ -203,6 +223,7 @@ public final class CanvasView extends View {
             c.restore();
         }
         drawLasso(c);
+        drawQuestionSelection(c);
         if(displayMode()==ERASE&&cursorKnown&&(nearPen||penId!=-1||temporaryEraser)){
             float radius=cursorRadius>0?cursorRadius:eraserSize/2;
             paint.setStyle(Paint.Style.FILL);paint.setColor(0x10167B70);c.drawCircle(lastX,lastY,radius,paint);
@@ -214,6 +235,9 @@ public final class CanvasView extends View {
     private void drawQuestions(Canvas canvas) {
         if (questionAssets == null) return;
         for (QuestionImage question : ink.questions) {
+            if (photoGesture != null && photoGesture.preview != null && photoGesture.original.id == question.id) {
+                question = photoGesture.preview;
+            }
             boolean transform = dragging && ink.selected.contains(question.id);
             double factor = transform ? selectionScale : 1;
             double x = transform ? selectionBox.left + (question.x - selectionBox.left) * factor + dragX : question.x;
@@ -227,7 +251,72 @@ public final class CanvasView extends View {
     }
 
     boolean canImportQuestion() {
-        return getWidth() > 0 && getHeight() > 0 && penId == -1 && !fingers && !ink.hasOpenEdit();
+        return getWidth() > 0 && getHeight() > 0 && penId == -1 && !fingers
+                && photoGesture == null && !ink.hasOpenEdit();
+    }
+
+    QuestionImage selectedQuestion() { return ink.question(selectedQuestionId); }
+
+    void selectQuestion(QuestionImage image) {
+        if (image != null) clearSelection();
+        selectedQuestionId = image == null ? 0 : image.id;
+        postInvalidateOnAnimation();
+    }
+
+    private void drawQuestionSelection(Canvas c) {
+        QuestionImage image = photoGesture != null && photoGesture.preview != null
+                ? photoGesture.preview : selectedQuestion();
+        if (image == null) return;
+        float right = screenX(image.right()), bottom = screenY(image.bottom());
+        paint.setColor(0xFF167B70);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1.2f));
+        c.drawRect(screenX(image.x), screenY(image.y), right, bottom, paint);
+        drawResizeHandle(c, right, bottom);
+    }
+
+    private QuestionImage questionAt(float x, float y) {
+        double worldX = wx(x), worldY = wy(y);
+        for (int i = ink.questions.size() - 1; i >= 0; i--) {
+            QuestionImage image = ink.questions.get(i);
+            if (image.contains(worldX, worldY)) return image;
+        }
+        return null;
+    }
+
+    private boolean beginPhotoGesture(float x, float y) {
+        QuestionImage image = selectedQuestion();
+        if (image == null) return false;
+        float hit = dp(RESIZE_HANDLE_DP / 2 + 4);
+        boolean resize = Math.abs(x - screenX(image.right())) <= hit && Math.abs(y - screenY(image.bottom())) <= hit;
+        if (!resize && questionAt(x, y) != image) return false;
+        photoGesture = new PhotoGesture(image, x, y, resize);
+        lastTapTime = -1;
+        fingerTap = false;
+        return true;
+    }
+
+    private void updatePhotoGesture(float x, float y) {
+        PhotoGesture gesture = photoGesture;
+        double dx = x - gesture.startX, dy = y - gesture.startY;
+        if (gesture.preview == null && Math.hypot(dx, dy) < dp(4)) return;
+        dx /= ink.view.scale;
+        dy /= ink.view.scale;
+        QuestionImage original = gesture.original;
+        if (gesture.resize) {
+            double w = original.width, h = original.height;
+            double factor = Math.max(.05, Math.min(100, 1 + (dx * w + dy * h) / (w * w + h * h)));
+            gesture.preview = original.scaled(original.x, original.y, factor);
+        } else {
+            gesture.preview = original.offset(original.id, dx, dy);
+        }
+        postInvalidateOnAnimation();
+    }
+
+    private void cancelPhotoGesture() {
+        if (photoGesture == null) return;
+        photoGesture = null;
+        postInvalidateOnAnimation();
     }
 
     boolean questionVisible(QuestionImage question) {
@@ -540,6 +629,7 @@ public final class CanvasView extends View {
     }
 
     private void blockNavigation() {
+        cancelPhotoGesture();
         navigationBlocked = true;
         lastTapTime = -1;
         fingerTap = false;
@@ -589,6 +679,7 @@ public final class CanvasView extends View {
             if (!fingerTap) lastTapTime = -1;
             fingerDownX = e.getX(index);
             fingerDownY = e.getY(index);
+            if (fingerTap && beginPhotoGesture(fingerDownX, fingerDownY)) return true;
         } else if (action == MotionEvent.ACTION_POINTER_DOWN
                 || Math.hypot(e.getX(index) - fingerDownX, e.getY(index) - fingerDownY) > dp(8)) {
             fingerTap = false;
@@ -607,6 +698,8 @@ public final class CanvasView extends View {
             if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) {
                 blockNavigation();
                 stopZoomAnimation();
+                QuestionImage image = selectedQuestion();
+                if (image != null && !image.contains(wx(e.getX(index)), wy(e.getY(index)))) selectQuestion(null);
                 if (beginPen(e, index)) {
                     requestUnbufferedDispatch(e);
                     if (!liveStroke.isEmpty()) invalidate();
@@ -628,6 +721,25 @@ public final class CanvasView extends View {
         if (navigationBlocked || nearPen || (action != MotionEvent.ACTION_DOWN && PalmContact.isWide(e))) {
             if (!navigationBlocked) blockNavigation();
             return true;
+        }
+        if (photoGesture != null) {
+            if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                cancelPhotoGesture();
+            } else {
+                if (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_UP) {
+                    updatePhotoGesture(e.getX(), e.getY());
+                }
+                if (action == MotionEvent.ACTION_UP) {
+                    QuestionImage preview = photoGesture.preview;
+                    cancelPhotoGesture();
+                    if (preview != null) {
+                        ink.replaceQuestion(preview);
+                        if (raster != null) raster.noteRevision(ink);
+                        refreshOverlay();
+                    }
+                }
+                return true;
+            }
         }
         if(action==MotionEvent.ACTION_UP){
             if (fingers) postInvalidateOnAnimation();
@@ -673,6 +785,13 @@ public final class CanvasView extends View {
 
     private void handleFingerTap(MotionEvent event) {
         float x = event.getX(), y = event.getY();
+        QuestionImage image = questionAt(x, y);
+        if (image != null) {
+            lastTapTime = -1;
+            selectQuestion(image);
+            return;
+        }
+        if (selectedQuestion() != null) selectQuestion(null);
         long upTime = event.getEventTime();
         long interval = event.getDownTime() - lastTapTime;
         if (lastTapTime >= 0 && interval >= 0 && interval <= ViewConfiguration.getDoubleTapTimeout()

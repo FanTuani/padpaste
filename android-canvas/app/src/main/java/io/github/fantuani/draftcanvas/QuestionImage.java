@@ -17,6 +17,10 @@ final class QuestionImage {
     double right() { return x + width; }
     double bottom() { return y + height; }
 
+    boolean contains(double pointX, double pointY) {
+        return pointX >= x && pointX <= right() && pointY >= y && pointY <= bottom();
+    }
+
     boolean intersects(double left, double top, double right, double bottom) {
         return right() > left && x < right && bottom() > top && y < bottom;
     }

@@ -64,7 +64,10 @@ public final class MainActivity extends Activity {
         zoom.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         zoom.setMinWidth(dp(60));
         zoom.setMinHeight(dp(48));
-        zoom.setOnClickListener(view -> canvas.resetZoom());
+        zoom.setOnClickListener(view -> {
+            canvas.selectQuestion(null);
+            canvas.resetZoom();
+        });
         FrameLayout.LayoutParams label = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
         label.setMarginStart(dp(16));
         label.bottomMargin = dp(1);

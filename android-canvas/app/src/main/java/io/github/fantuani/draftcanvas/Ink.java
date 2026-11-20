@@ -239,6 +239,16 @@ public final class Ink {
         return null;
     }
 
+    void replaceQuestion(QuestionImage image) {
+        for (int i = 0; i < questions.size(); i++) {
+            if (questions.get(i).id != image.id) continue;
+            begin();
+            questions.set(i, image);
+            commit();
+            return;
+        }
+    }
+
     private boolean occupied(double left, double top, double right, double bottom) {
         for (Stroke stroke : strokes) if (stroke.intersects(left, top, right, bottom)) return true;
         for (QuestionImage image : questions) if (image.intersects(left, top, right, bottom)) return true;

@@ -185,6 +185,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
         QuestionImage image = canvas.ink.importQuestion(asset, width, height, canvas.getWidth(),
                 canvas.getHeight(), dp(36), now - lastImport < 120_000 ? previousId : 0);
         previousId = image.id;
+        canvas.selectQuestion(image);
         lastImport = now;
         importing = false;
         canvas.refresh();

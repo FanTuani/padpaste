@@ -203,6 +203,52 @@ public final class CanvasTestRunner extends Instrumentation {
         }
     }
 
+    private void checkQuestionTouch() {
+        Ink document = new Ink();
+        CanvasView view = new CanvasView(getTargetContext(), document);
+        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        view.layout(0, 0, 512, 512);
+        QuestionImage image = new QuestionImage(document.nextId(), "test", -120, -80, 110, 80);
+        document.questions.add(image);
+        int finger = MotionEvent.TOOL_TYPE_FINGER;
+        event(view, finger, MotionEvent.ACTION_DOWN, 180, 210);
+        event(view, finger, MotionEvent.ACTION_UP, 180, 210);
+        check(view.selectedQuestion() == image, "finger tap must select an image");
+
+        event(view, finger, MotionEvent.ACTION_DOWN, 180, 210);
+        event(view, finger, MotionEvent.ACTION_MOVE, 220, 230);
+        check(view.selectedQuestion() == image, "image drag preview must not change the draft");
+        event(view, finger, MotionEvent.ACTION_UP, 220, 230);
+        check(view.selectedQuestion().x == -80 && view.selectedQuestion().y == -60,
+                "dragging the image must commit the move");
+        event(view, finger, MotionEvent.ACTION_DOWN, 286, 276);
+        event(view, finger, MotionEvent.ACTION_MOVE, 341, 316);
+        event(view, finger, MotionEvent.ACTION_UP, 341, 316);
+        QuestionImage resized = view.selectedQuestion();
+        check(resized.width == 165 && resized.height == 120 && resized.x == -80 && resized.y == -60,
+                "the corner handle must resize proportionally around the top left");
+
+        event(view, finger, MotionEvent.ACTION_DOWN, 430, 410);
+        event(view, finger, MotionEvent.ACTION_MOVE, 460, 410);
+        event(view, finger, MotionEvent.ACTION_UP, 460, 410);
+        check(document.view.x == -30 && view.selectedQuestion() == resized,
+                "panning from empty space must preserve selection");
+        pen(view, MotionEvent.ACTION_DOWN, 230, 225);
+        pen(view, MotionEvent.ACTION_UP, 230, 225);
+        check(view.selectedQuestion() == resized, "pen down inside must not manipulate the photo");
+        pen(view, MotionEvent.ACTION_DOWN, 450, 400);
+        pen(view, MotionEvent.ACTION_UP, 450, 400);
+        check(view.selectedQuestion() == null && document.strokes.size() == 2,
+                "pen down outside must dismiss selection and still write");
+
+        event(view, finger, MotionEvent.ACTION_DOWN, 230, 225);
+        event(view, finger, MotionEvent.ACTION_UP, 230, 225);
+        check(view.selectedQuestion() == resized, "image must be selectable again");
+        event(view, finger, MotionEvent.ACTION_DOWN, 450, 400);
+        event(view, finger, MotionEvent.ACTION_UP, 450, 400);
+        check(view.selectedQuestion() == null, "tapping blank space must dismiss selection");
+    }
+
     private void checkPenPressureThreshold() {
         Ink ink = new Ink();
         CanvasView view = new CanvasView(getTargetContext(), ink);
@@ -321,6 +367,7 @@ public final class CanvasTestRunner extends Instrumentation {
             checkGridAndPenWidth();
             checkLiveTip(v);
             checkVariableWidth();
+            checkQuestionTouch();
             checkPenPressureThreshold();
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");
