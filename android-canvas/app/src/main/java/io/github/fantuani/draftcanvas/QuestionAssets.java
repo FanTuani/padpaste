@@ -9,6 +9,7 @@ import android.util.LruCache;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -17,13 +18,17 @@ import java.util.concurrent.Executors;
 
 final class QuestionAssets {
     static final int MAX_BYTES = 6 * 1024 * 1024;
+    private static final int CACHE_BYTES = 40 * 1024 * 1024;
+    private static final int MOTION_EDGE = 960;
     private static QuestionAssets instance;
     private final File directory;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<String> loading = new HashSet<>();
-    private final LruCache<String, Bitmap> bitmaps = new LruCache<String, Bitmap>(40 * 1024 * 1024) {
-        @Override protected int sizeOf(String key, Bitmap value) { return value.getAllocationByteCount(); }
+    private final HashMap<String, Integer> sourceEdges = new HashMap<>();
+    private record Sample(String asset, int divisor) {}
+    private final LruCache<Sample, Bitmap> bitmaps = new LruCache<Sample, Bitmap>(CACHE_BYTES) {
+        @Override protected int sizeOf(Sample key, Bitmap value) { return value.getAllocationByteCount(); }
     };
 
     static QuestionAssets get(Context context) {
@@ -46,6 +51,7 @@ final class QuestionAssets {
         }
         Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
         if (bitmap == null) throw new IOException("Incomplete question image");
+        bitmap.prepareToDraw();
         return bitmap;
     }
 
@@ -61,8 +67,11 @@ final class QuestionAssets {
                     stream.getFD().sync();
                 }
                 if (!temp.renameTo(file(asset))) throw new IOException("Cannot save question");
-                bitmaps.put(asset, bitmap);
-                main.post(() -> result.accept(asset));
+                bitmaps.put(new Sample(asset, 1), bitmap);
+                main.post(() -> {
+                    sourceEdges.put(asset, Math.max(bitmap.getWidth(), bitmap.getHeight()));
+                    result.accept(asset);
+                });
             } catch (IOException failure) {
                 main.post(() -> result.accept(null));
             } finally {
@@ -71,20 +80,67 @@ final class QuestionAssets {
         });
     }
 
-    Bitmap visible(String asset, Runnable ready) {
-        Bitmap bitmap = bitmaps.get(asset);
-        if (bitmap != null || !loading.add(asset)) return bitmap;
+    static int edgeLimit(int images, boolean moving) {
+        // Keep the visible working set below the LRU limit, including during a resolution change.
+        int budget = (int) Math.sqrt(CACHE_BYTES * .68 / (4L * Math.max(1, images)));
+        return moving ? Math.min(MOTION_EDGE, budget) : budget;
+    }
+
+    Bitmap visible(String asset, int edge, Runnable ready) {
+        Integer source = sourceEdges.get(asset);
+        if (source == null) {
+            load(asset, edge, ready);
+            return null;
+        }
+        if (source == 0) return null;
+        int divisor = sampleSize(source, edge);
+        Bitmap desired = bitmaps.get(new Sample(asset, divisor));
+        if (desired != null) return desired;
+        load(asset, edge, ready);
+        // Keep displaying a previously decoded image while its requested resolution is loading.
+        for (int smaller = divisor * 2; smaller <= source * 2; smaller *= 2) {
+            Bitmap fallback = bitmaps.get(new Sample(asset, smaller));
+            if (fallback != null) return fallback;
+        }
+        for (int larger = divisor / 2; larger >= 1; larger /= 2) {
+            Bitmap fallback = bitmaps.get(new Sample(asset, larger));
+            if (fallback != null) return fallback;
+        }
+        return null;
+    }
+
+    private void load(String asset, int edge, Runnable ready) {
+        if (!loading.add(asset)) return;
+        Integer knownEdge = sourceEdges.get(asset);
         worker.execute(() -> {
-            Bitmap loaded = BitmapFactory.decodeFile(file(asset).getPath());
-            if (loaded != null) bitmaps.put(asset, loaded);
+            String path = file(asset).getPath();
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            int source = knownEdge == null ? 0 : knownEdge;
+            if (source == 0) {
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(path, options);
+                source = Math.max(options.outWidth, options.outHeight);
+            }
+            options.inJustDecodeBounds = false;
+            options.inSampleSize = sampleSize(source, edge);
+            Bitmap loaded = source > 0 ? BitmapFactory.decodeFile(path, options) : null;
+            if (loaded != null) {
+                loaded.prepareToDraw();
+                bitmaps.put(new Sample(asset, options.inSampleSize), loaded);
+            }
+            int sourceEdge = loaded == null ? 0 : source;
             main.post(() -> {
-                if (loaded != null) {
-                    loading.remove(asset);
-                    ready.run();
-                }
+                sourceEdges.put(asset, sourceEdge);
+                loading.remove(asset);
+                ready.run();
             });
         });
-        return null;
+    }
+
+    private static int sampleSize(int source, int edge) {
+        int divisor = 1;
+        while (((source + divisor - 1) / divisor) > edge) divisor *= 2;
+        return divisor;
     }
 
     private File file(String asset) { return new File(directory, asset + ".image"); }

@@ -38,6 +38,8 @@ public final class CanvasView extends View {
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint photoPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final RectF photoBounds = new RectF();
+    private final ArrayList<QuestionImage> visibleQuestions = new ArrayList<>();
+    private final Runnable redrawQuestions = this::postInvalidateOnAnimation;
     private final RectF offerBounds = new RectF();
     private QuestionImage questionOffer;
     private Bitmap questionOfferBitmap;
@@ -250,19 +252,22 @@ public final class CanvasView extends View {
 
     private void drawQuestions(Canvas canvas) {
         if (questionAssets == null) return;
+        visibleQuestions.clear();
         for (QuestionImage question : ink.questions) {
             if (questionOffer != null && question.id == offerImportId) continue;
             if (photoGesture != null && photoGesture.preview != null && photoGesture.original.id == question.id) {
                 question = photoGesture.preview;
             }
-            boolean transform = dragging && ink.selected.contains(question.id);
-            double factor = transform ? selectionScale : 1;
-            double x = transform ? selectionBox.left + (question.x - selectionBox.left) * factor + dragX : question.x;
-            double y = transform ? selectionBox.top + (question.y - selectionBox.top) * factor + dragY : question.y;
-            photoBounds.set(screenX(x), screenY(y), screenX(x + question.width * factor),
-                    screenY(y + question.height * factor));
-            if (!photoBounds.intersects(0, 0, getWidth(), getHeight())) continue;
-            Bitmap bitmap = questionAssets.visible(question.asset, this::postInvalidateOnAnimation);
+            questionDisplayBounds(question);
+            if (photoBounds.intersects(0, 0, getWidth(), getHeight())) visibleQuestions.add(question);
+        }
+        boolean moving = fingers || zoomAnimator != null || photoGesture != null || dragging;
+        int edgeLimit = QuestionAssets.edgeLimit(visibleQuestions.size(), moving);
+        for (QuestionImage question : visibleQuestions) {
+            questionDisplayBounds(question);
+            int projected = (int) Math.ceil(Math.max(photoBounds.width(), photoBounds.height()) * 1.4);
+            int requestedEdge = Math.max(1, moving ? edgeLimit : Math.min(edgeLimit, projected));
+            Bitmap bitmap = questionAssets.visible(question.asset, requestedEdge, redrawQuestions);
             if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
         }
         if (questionOffer != null) {
@@ -275,6 +280,17 @@ public final class CanvasView extends View {
             photoPaint.setAlpha(255);
             canvas.restore();
         }
+    }
+
+    private void questionDisplayBounds(QuestionImage question) {
+        if (!dragging || !ink.selected.contains(question.id)) {
+            questionBounds(question, photoBounds);
+            return;
+        }
+        double x = selectionBox.left + (question.x - selectionBox.left) * selectionScale + dragX;
+        double y = selectionBox.top + (question.y - selectionBox.top) * selectionScale + dragY;
+        photoBounds.set(screenX(x), screenY(y), screenX(x + question.width * selectionScale),
+                screenY(y + question.height * selectionScale));
     }
 
     void questionBounds(QuestionImage image, RectF bounds) {
@@ -828,7 +844,7 @@ public final class CanvasView extends View {
             prevX = cx;
             prevY = cy;
             prevDistance = distance;
-            refresh();
+            refreshOverlay();
         }
         return true;
     }
