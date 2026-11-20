@@ -645,7 +645,10 @@ final class AsyncInkTiles {
         paint.setColor(stroke.color);
         if (stroke.points.length == 3) {
             paint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(stroke.points[0], stroke.points[1], stroke.width / 2, paint);
+            canvas.drawCircle(stroke.points[0], stroke.points[1], stroke.maxWidth / 2, paint);
+        } else if (stroke.variableWidth) {
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawPath(path, paint);
         } else {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(stroke.width);
@@ -658,7 +661,16 @@ final class AsyncInkTiles {
     static Path strokePath(Ink.Stroke stroke){
         StrokeData data=stroke.data();Path path=new Path();if(data.segments<1)return path;
         double[] ranges=stroke.sections;int count=ranges==null?2:ranges.length;
-        for(int k=0;k<count;k+=2){double a=ranges==null?0:ranges[k],b=ranges==null?data.segments:ranges[k+1];path.moveTo(data.coordinate(a,0),data.coordinate(a,1));for(int i=(int)Math.floor(a)+1;i<b;i++)path.lineTo(data.points[i*3],data.points[i*3+1]);path.lineTo(data.coordinate(b,0),data.coordinate(b,1));}
+        for (int k=0;k<count;k+=2) {
+            double a=ranges==null?0:ranges[k],b=ranges==null?data.segments:ranges[k+1];
+            if (stroke.variableWidth) {
+                PressurePath.append(path, data, a, b, stroke.width / 2);
+            } else {
+                path.moveTo(data.coordinate(a,0),data.coordinate(a,1));
+                for(int i=(int)Math.floor(a)+1;i<b;i++)path.lineTo(data.points[i*3],data.points[i*3+1]);
+                path.lineTo(data.coordinate(b,0),data.coordinate(b,1));
+            }
+        }
         return path;
     }
 }

@@ -12,6 +12,7 @@ final class LiveStroke {
     private float[] points = new float[96];
     private int size;
     private float anchorX, anchorY;
+    private float anchorWidth, prefixX, prefixY, prefixWidth;
     private boolean previewDirty;
 
     boolean isEmpty() { return size == 0; }
@@ -22,42 +23,76 @@ final class LiveStroke {
         preview.rewind();
     }
 
-    boolean add(float x, float y, double scale, float width) {
+    boolean add(float x, float y, double scale, float width, float multiplier, boolean variableWidth) {
         if (isEmpty()) {
-            prefix.moveTo(x, y);
-            anchorX = x;
-            anchorY = y;
+            if (variableWidth) prefix.addCircle(x, y, width * multiplier / 2, Path.Direction.CCW);
+            else prefix.moveTo(x, y);
+            anchorX = prefixX = x;
+            anchorY = prefixY = y;
+            anchorWidth = prefixWidth = multiplier;
         } else {
             float lastX = points[size - 3], lastY = points[size - 2];
-            if (Math.hypot(x - lastX, y - lastY) * scale < .25) return false;
+            float lastWidth = points[size - 1];
+            if (Math.hypot(x - lastX, y - lastY) * scale < .25) {
+                if (!variableWidth || size != 3 || multiplier <= lastWidth) return false;
+                anchorWidth = prefixWidth = points[2] = multiplier;
+                prefix.rewind();
+                prefix.addCircle(lastX, lastY, width * multiplier / 2, Path.Direction.CCW);
+                return true;
+            }
             if (Math.hypot(lastX - anchorX, lastY - anchorY) >= StrokeGeometry.anchorSpacing(width)) {
-                prefix.quadTo(anchorX, anchorY, (anchorX + lastX) * .5f, (anchorY + lastY) * .5f);
+                float midX = (anchorX + lastX) * .5f, midY = (anchorY + lastY) * .5f;
+                float midWidth = (anchorWidth + lastWidth) * .5f;
+                if (variableWidth) {
+                    PressurePath.quadratic(prefix, prefixX, prefixY, width * prefixWidth / 2,
+                            anchorX, anchorY, width * anchorWidth / 2, midX, midY,
+                            width * midWidth / 2, pressureStep(width, scale));
+                } else prefix.quadTo(anchorX, anchorY, midX, midY);
+                prefixX = midX;
+                prefixY = midY;
+                prefixWidth = midWidth;
                 anchorX = lastX;
                 anchorY = lastY;
+                anchorWidth = lastWidth;
             }
         }
         if (size == points.length) points = Arrays.copyOf(points, size * 2);
         points[size++] = x;
         points[size++] = y;
-        points[size++] = 1f;
+        points[size++] = multiplier;
         previewDirty = true;
         return true;
     }
 
-    void draw(Canvas canvas, Paint paint, float width) {
+    void draw(Canvas canvas, Paint paint, float width, double scale, boolean variableWidth) {
         if (size == 3) {
             paint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(points[0], points[1], width / 2, paint);
+            canvas.drawCircle(points[0], points[1], width * points[2] / 2, paint);
             return;
         }
         if (previewDirty) {
             float x = points[size - 3], y = points[size - 2];
+            float midX = (anchorX + x) * .5f, midY = (anchorY + y) * .5f;
             preview.set(prefix);
-            preview.quadTo(anchorX, anchorY, (anchorX + x) * .5f, (anchorY + y) * .5f);
-            preview.quadTo(x, y, x, y);
+            if (variableWidth) {
+                float step = pressureStep(width, scale);
+                float endR = width * points[size - 1] / 2, anchorR = width * anchorWidth / 2;
+                float midR = (anchorR + endR) * .5f;
+                PressurePath.quadratic(preview, prefixX, prefixY, width * prefixWidth / 2,
+                        anchorX, anchorY, anchorR, midX, midY, midR, step);
+                PressurePath.quadratic(preview, midX, midY, midR, x, y, endR, x, y, endR, step);
+            } else {
+                preview.quadTo(anchorX, anchorY, midX, midY);
+                preview.quadTo(x, y, x, y);
+            }
             previewDirty = false;
         }
+        if (variableWidth) paint.setStyle(Paint.Style.FILL);
         canvas.drawPath(preview, paint);
+    }
+
+    private static float pressureStep(float width, double scale) {
+        return Math.max((float) (1.5 / scale), width * .25f);
     }
 
     float[] copyPoints() { return Arrays.copyOf(points, size); }

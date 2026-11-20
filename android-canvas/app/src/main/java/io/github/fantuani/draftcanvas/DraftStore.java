@@ -17,7 +17,7 @@ import java.util.function.Consumer;
 /** Saves the single local draft. The canvas owns the model; one worker owns the file. */
 final class DraftStore {
     private static final int MAGIC = 0x44524146; // DRAF
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static final long SAVE_DELAY_MS = 240;
     private static DraftStore instance;
 
@@ -151,6 +151,7 @@ final class DraftStore {
                 out.writeDouble(stroke.x);
                 out.writeDouble(stroke.y);
                 out.writeBoolean(flattened);
+                out.writeBoolean(stroke.variableWidth);
                 out.writeInt(points.length);
                 for (float point : points) out.writeFloat(point);
                 out.writeInt(stroke.sections == null ? -1 : stroke.sections.length);
@@ -170,7 +171,9 @@ final class DraftStore {
 
     private Ink read() {
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(file.openRead(), 32 * 1024))) {
-            if (in.readInt() != MAGIC || in.readInt() != VERSION) throw new IOException("Unknown draft format");
+            if (in.readInt() != MAGIC) throw new IOException("Unknown draft format");
+            int version = in.readInt();
+            if (version < 1 || version > VERSION) throw new IOException("Unknown draft format");
             Ink restored = new Ink();
             restored.view.x = coordinate(in.readDouble());
             restored.view.y = coordinate(in.readDouble());
@@ -179,7 +182,7 @@ final class DraftStore {
                 throw new IOException("Invalid draft scale");
             }
             int count = count(in.readInt(), in.available() / 45);
-            for (int i = 0; i < count; i++) readStroke(in, restored);
+            for (int i = 0; i < count; i++) readStroke(in, restored, version);
             if (in.read() != -1) throw new IOException("Trailing draft data");
             return restored;
         } catch (FileNotFoundException firstLaunch) {
@@ -190,18 +193,22 @@ final class DraftStore {
         }
     }
 
-    private static void readStroke(DataInputStream in, Ink restored) throws IOException {
+    private static void readStroke(DataInputStream in, Ink restored, int version) throws IOException {
         int color = in.readInt();
         float width = in.readFloat();
         if (!Float.isFinite(width) || width <= 0) throw new IOException("Invalid stroke width");
         double x = coordinate(in.readDouble()), y = coordinate(in.readDouble());
         boolean flattened = in.readBoolean();
+        boolean variableWidth = version >= 2 && in.readBoolean();
         int length = count(in.readInt(), in.available() / 4);
         if (length < 3 || length % 3 != 0) throw new IOException("Invalid points");
         float[] points = new float[length];
         for (int i = 0; i < length; i++) {
             points[i] = in.readFloat();
             if (!Float.isFinite(points[i])) throw new IOException("Invalid stroke point");
+            if (variableWidth && i % 3 == 2 && (points[i] <= 0 || points[i] > 2)) {
+                throw new IOException("Invalid stroke width multiplier");
+            }
         }
         int sectionCount = in.readInt();
         double[] sections = null;
@@ -218,7 +225,8 @@ final class DraftStore {
                 sections[i] = previous = limit;
             }
         }
-        restored.strokes.add(new Ink.Stroke(restored.nextId(), color, width, x, y, points, flattened, sections));
+        restored.strokes.add(new Ink.Stroke(restored.nextId(), color, width, x, y, points, flattened,
+                sections, variableWidth));
     }
 
     private static int count(int value, int max) throws IOException {

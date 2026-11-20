@@ -17,7 +17,13 @@ final class StrokeData {
     static int first(double[] ranges,double t){int lo=0,hi=ranges.length/2;while(lo<hi){int mid=(lo+hi)/2;if(ranges[mid*2+1]<=t)lo=mid+1;else hi=mid;}return lo*2;}
     static boolean visible(double[] ranges,double a,double b){if(ranges==null)return true;int i=first(ranges,a);return i<ranges.length&&ranges[i]<=b;}
     double[] erase(double[] previous,double ax,double ay,double bx,double by,double radius){
-        Intervals hits=new Intervals();Capsule capsule=new Capsule(ax,ay,bx,by,radius);query(root,previous,capsule,hits);
+        return erase(previous, ax, ay, bx, by, radius, 0, false, 0);
+    }
+    double[] erase(double[] previous,double ax,double ay,double bx,double by,double radius,
+                   float baseRadius,boolean variableWidth,float maxRadius){
+        Intervals hits=new Intervals();
+        Capsule capsule=new Capsule(ax,ay,bx,by,radius+maxRadius);
+        query(root,previous,capsule,hits,radius,variableWidth?baseRadius:0);
         if(hits.size==0)return previous;
         double[] visible=previous==null?new double[]{0,segments}:previous;Intervals result=new Intervals();boolean changed=false;int h=0;
         for(int i=0;i<visible.length;i+=2){double cursor=visible[i],end=visible[i+1];while(h<hits.size&&hits.values[h+1]<=cursor)h+=2;int j=h;
@@ -25,10 +31,18 @@ final class StrokeData {
             if(cursor<end-1e-9)result.add(cursor,end);
         }return changed?Arrays.copyOf(result.values,result.size):previous;
     }
-    private void query(Node node,double[] ranges,Capsule c,Intervals hits){
+    private void query(Node node,double[] ranges,Capsule c,Intervals hits,double radius,float baseRadius){
         if(node.right<c.left||node.left>c.right||node.bottom<c.top||node.top>c.bottom||!visible(ranges,node.start,node.end))return;
-        if(node.a!=null){query(node.a,ranges,c,hits);query(node.b,ranges,c,hits);return;}
-        for(int i=node.start;i<node.end;i++)if(c.hit(points[i*3],points[i*3+1],points[i*3+3],points[i*3+4]))hits.add(i+c.lo,i+c.hi);
+        if(node.a!=null){query(node.a,ranges,c,hits,radius,baseRadius);query(node.b,ranges,c,hits,radius,baseRadius);return;}
+        for(int i=node.start;i<node.end;i++) {
+            int p = i * 3;
+            boolean hit = baseRadius == 0
+                    ? c.hit(points[p], points[p + 1], points[p + 3], points[p + 4])
+                    : c.hitVariable(points[p], points[p + 1], points[p + 3], points[p + 4],
+                            radius + baseRadius * points[p + 2],
+                            baseRadius * (points[p + 5] - points[p + 2]));
+            if (hit) hits.add(i + c.lo, i + c.hi);
+        }
     }
     float coordinate(double t,int axis){int i=Math.min(segments-1,(int)t);if(i<0)return points[axis];double f=t-i;return (float)(points[i*3+axis]+(points[(i+1)*3+axis]-points[i*3+axis])*f);}
     private static final class Intervals {
@@ -39,6 +53,55 @@ final class StrokeData {
         final double ax,ay,bx,by,r,len,vx,vy,left,top,right,bottom;double lo,hi,rlo,rhi;
         Capsule(double ax,double ay,double bx,double by,double r){this.ax=ax;this.ay=ay;this.bx=bx;this.by=by;this.r=r;len=Math.hypot(bx-ax,by-ay);vx=len>1e-9?(bx-ax)/len:1;vy=len>1e-9?(by-ay)/len:0;left=Math.min(ax,bx)-r;right=Math.max(ax,bx)+r;top=Math.min(ay,by)-r;bottom=Math.max(ay,by)+r;}
         boolean hit(double x,double y,double nx,double ny){if(Math.max(x,nx)<left||Math.min(x,nx)>right||Math.max(y,ny)<top||Math.min(y,ny)>bottom)return false;double dx=nx-x,dy=ny-y;lo=Double.POSITIVE_INFINITY;hi=Double.NEGATIVE_INFINITY;circle(x-ax,y-ay,dx,dy);circle(x-bx,y-by,dx,dy);if(len>1e-9){rlo=0;rhi=1;if(slab((x-ax)*vx+(y-ay)*vy,dx*vx+dy*vy,0,len)&&slab(-(x-ax)*vy+(y-ay)*vx,-dx*vy+dy*vx,-r,r))merge(rlo,rhi);}return hi-lo>1e-9;}
+        boolean hitVariable(double x,double y,double nx,double ny,double radius,double change) {
+            if (Math.max(x,nx)<left || Math.min(x,nx)>right || Math.max(y,ny)<top || Math.min(y,ny)>bottom) return false;
+            double dx=nx-x, dy=ny-y, px=x-ax, py=y-ay;
+            lo=Double.POSITIVE_INFINITY;
+            hi=Double.NEGATIVE_INFINITY;
+            rlo=0;
+            rhi=1;
+            if (len<=1e-9) {
+                cover(px,py,dx,dy,radius,change);
+            } else {
+                double along=px*vx+py*vy, alongRate=dx*vx+dy*vy;
+                if (slab(along,alongRate,Double.NEGATIVE_INFINITY,0)) cover(px,py,dx,dy,radius,change);
+                rlo=0;
+                rhi=1;
+                if (slab(along,alongRate,0,len)) cover(-px*vy+py*vx,0,-dx*vy+dy*vx,0,radius,change);
+                rlo=0;
+                rhi=1;
+                if (slab(along,alongRate,len,Double.POSITIVE_INFINITY)) cover(x-bx,y-by,dx,dy,radius,change);
+            }
+            return hi-lo>1e-9;
+        }
+        // Solve squared distance <= squared radius over the current projection interval.
+        void cover(double x,double y,double dx,double dy,double radius,double change) {
+            double a=dx*dx+dy*dy-change*change;
+            double b=x*dx+y*dy-radius*change;
+            double c=x*x+y*y-radius*radius;
+            if (Math.abs(a)<1e-12) {
+                if (Math.abs(b)<1e-12) {
+                    if (c<0) merge(rlo,rhi);
+                } else {
+                    double edge=-c/(2*b);
+                    if (b>0) merge(rlo,Math.min(rhi,edge));
+                    else merge(Math.max(rlo,edge),rhi);
+                }
+                return;
+            }
+            double discriminant=b*b-a*c;
+            if (discriminant<=0) {
+                if (a<0) merge(rlo,rhi);
+                return;
+            }
+            double root=Math.sqrt(discriminant);
+            double first=(-b-root)/a, last=(-b+root)/a;
+            if (a>0) merge(Math.max(rlo,first),Math.min(rhi,last));
+            else {
+                merge(rlo,Math.min(rhi,last));
+                merge(Math.max(rlo,first),rhi);
+            }
+        }
         void circle(double x,double y,double dx,double dy){double a=dx*dx+dy*dy,c=x*x+y*y-r*r;if(a<1e-18){if(c<0)merge(0,1);return;}double b=x*dx+y*dy,d=b*b-a*c;if(d<=0)return;double root=Math.sqrt(d);merge(Math.max(0,(-b-root)/a),Math.min(1,(-b+root)/a));}
         void merge(double a,double b){if(b>a){lo=Math.min(lo,a);hi=Math.max(hi,b);}}
         boolean slab(double p,double d,double a,double b){if(Math.abs(d)<1e-12)return p>=a&&p<=b;double x=(a-p)/d,y=(b-p)/d;rlo=Math.max(rlo,Math.min(x,y));rhi=Math.min(rhi,Math.max(x,y));return rhi>rlo;}

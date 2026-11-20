@@ -12,10 +12,18 @@ final class AsyncRasterCheck {
     static void run(Instrumentation runner){
         Bundle result=new Bundle();AtomicReference<CanvasView> holder=new AtomicReference<>();GpuTarget hardware=null;
         try{
-            runner.runOnMainSync(()->{CanvasView v=new CanvasView(runner.getTargetContext(),new Ink());v.testAsync=true;android.widget.FrameLayout root=new android.widget.FrameLayout(runner.getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);v.ink.view.x=1440;v.ink.view.y=870;v.ink.add(new Ink.Stroke(v.ink.nextId(),0xff243137,5,450,1100,new float[]{0,0,1,200,0,1}));holder.set(v);});
+            runner.runOnMainSync(()->{CanvasView v=new CanvasView(runner.getTargetContext(),new Ink());v.testAsync=true;android.widget.FrameLayout root=new android.widget.FrameLayout(runner.getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);v.ink.view.x=1440;v.ink.view.y=870;
+                v.ink.add(new Ink.Stroke(v.ink.nextId(), 0xff243137, 16, 450, 1100,
+                        new float[]{0,0,.5f,200,0,1.5f}, false, null, true));
+                holder.set(v);
+            });
             CanvasView view=holder.get();AtomicReference<GpuTarget> gpuHolder=new AtomicReference<>();runner.runOnMainSync(()->gpuHolder.set(new GpuTarget(2880,1740)));hardware=gpuHolder.get();GpuTarget target=hardware;waitReady(runner,view,target);
+            Bitmap image = copy(runner, target);
+            check(image.getPixel(470,1108) != 0xff243137 && image.getPixel(630,1108) == 0xff243137,
+                    "background tiles must preserve pressure width");
+            image.recycle();
             runner.runOnMainSync(()->{view.ink.begin();view.eraseWorld(512,1080,512,1120,40);view.ink.commit();record(view,target);});
-            Bitmap image=copy(runner,target);check(image.getPixel(512,1100)!=0xff243137,"immediate erase preview missing");check(image.getPixel(460,1100)==0xff243137,"preview erased outside brush");image.recycle();
+            image=copy(runner,target);check(image.getPixel(512,1100)!=0xff243137,"immediate erase preview missing");check(image.getPixel(460,1100)==0xff243137,"preview erased outside brush");image.recycle();
             runner.runOnMainSync(()->{view.setPenColor(0xffcf4941);pen(view,MotionEvent.ACTION_DOWN,480,1100);pen(view,MotionEvent.ACTION_MOVE,512,1100);pen(view,MotionEvent.ACTION_UP,544,1100);record(view,target);});
             image=copy(runner,target);check(image.getPixel(512,1100)==0xffcf4941,"fresh ink lost above pending erasure");image.recycle();waitReady(runner,view,target);
             image=copy(runner,target);check(image.getPixel(512,1100)==0xffcf4941,"background tile replaced fresher ink");image.recycle();

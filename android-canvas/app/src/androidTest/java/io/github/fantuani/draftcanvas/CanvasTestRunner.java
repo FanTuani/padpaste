@@ -108,6 +108,7 @@ public final class CanvasTestRunner extends Instrumentation {
         new android.widget.FrameLayout(getTargetContext()).addView(view);
         view.layout(0, 0, 512, 512);
         view.width = 12;
+        view.penSensitivity = 0;
         Bitmap image = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888);
         try {
             Canvas frame = new Canvas(image);
@@ -162,6 +163,42 @@ public final class CanvasTestRunner extends Instrumentation {
             check(bitmap.getPixel(160, 60) != view.color, "cancel must remove the live path");
         } finally {
             view.width = originalWidth;
+            bitmap.recycle();
+        }
+    }
+
+    private void checkVariableWidth() {
+        Ink ink = new Ink();
+        CanvasView view = new CanvasView(getTargetContext(), ink);
+        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        view.layout(0, 0, 512, 512);
+        view.width = 20;
+        Bitmap bitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888);
+        float originalPressure = pressure;
+        try {
+            pressure = .04f;
+            pen(view, MotionEvent.ACTION_DOWN, 80, 180);
+            pen(view, MotionEvent.ACTION_MOVE, 160, 180);
+            pressure = 1;
+            pen(view, MotionEvent.ACTION_MOVE, 280, 180);
+            pen(view, MotionEvent.ACTION_MOVE, 360, 180);
+            Canvas frame = new Canvas(bitmap);
+            view.draw(frame);
+            check(bitmap.getPixel(120, 190) != view.color && bitmap.getPixel(320, 190) == view.color,
+                    "pressure must change visible width before lifting the pen");
+            pen(view, MotionEvent.ACTION_UP, 360, 180);
+            view.draw(frame);
+            check(bitmap.getPixel(120, 190) != view.color && bitmap.getPixel(320, 190) == view.color,
+                    "the committed stroke must keep its visible pressure profile");
+            check(ink.strokes.get(0).variableWidth, "stroke lost variable width");
+            double x = ink.view.worldX(320, 512), y = ink.view.worldY(180, 512);
+            check(ink.erase(x, y, x, y, 12), "eraser must cut a pressure stroke");
+            view.refresh();
+            view.draw(frame);
+            check(bitmap.getPixel(320, 180) != view.color && bitmap.getPixel(360, 190) == view.color,
+                    "erasure must preserve the neighboring pressure profile");
+        } finally {
+            pressure = originalPressure;
             bitmap.recycle();
         }
     }
@@ -278,11 +315,12 @@ public final class CanvasTestRunner extends Instrumentation {
             CanvasView v=new CanvasView(getTargetContext(),new Ink());
             android.widget.FrameLayout root=new android.widget.FrameLayout(getTargetContext());root.addView(v,new android.widget.FrameLayout.LayoutParams(-1,-1));
             root.measure(View.MeasureSpec.makeMeasureSpec(2880,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1740,View.MeasureSpec.EXACTLY));root.layout(0,0,2880,1740);
-            Ink d=v.ink;time=SystemClock.uptimeMillis();
+            Ink d=v.ink;time=SystemClock.uptimeMillis();v.penSensitivity=0;
             checkWideContactBeforePen();
             checkPalmRejection();
             checkGridAndPenWidth();
             checkLiveTip(v);
+            checkVariableWidth();
             checkPenPressureThreshold();
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");

@@ -6,8 +6,10 @@ import java.util.*;
 public final class Ink {
     public static final class Stroke {
         public final long id;public final int color;public final float width;
-        public final double x,y;public final float[] points; // local x,y,pressure triplets
+        public final double x,y;public final float[] points; // local x, y, and width multiplier for variable-width ink
         public final double left,top,right,bottom;
+        final boolean variableWidth;
+        final float maxWidth;
         private final boolean flattened;private float[] geometry;private StrokeData data;final double[] sections;
         Object renderState,previousRender;
         public Stroke(long id,int color,float width,double x,double y,float[] points){
@@ -17,18 +19,28 @@ public final class Ink {
             this(id,color,width,x,y,points,flattened,null);
         }
         Stroke(long id,int color,float width,double x,double y,float[] points,boolean flattened,double[] sections){
+            this(id, color, width, x, y, points, flattened, sections, false);
+        }
+        Stroke(long id,int color,float width,double x,double y,float[] points,boolean flattened,
+               double[] sections,boolean variableWidth){
             this.sections=sections;this.flattened=flattened;this.id=id;this.color=color;this.width=width;this.x=x;this.y=y;this.points=points;
+            this.variableWidth = variableWidth;
+            float highest = variableWidth ? points[2] : 1f;
             double l=points[0],t=points[1],r=l,b=t;
-            for(int i=0;i<points.length;i+=3){l=Math.min(l,points[i]);r=Math.max(r,points[i]);t=Math.min(t,points[i+1]);b=Math.max(b,points[i+1]);}
-            left=x+l-width;right=x+r+width;top=y+t-width;bottom=y+b+width;
+            for(int i=0;i<points.length;i+=3){l=Math.min(l,points[i]);r=Math.max(r,points[i]);t=Math.min(t,points[i+1]);b=Math.max(b,points[i+1]);
+                if (variableWidth) highest = Math.max(highest, points[i + 2]);}
+            maxWidth = width * highest;
+            left=x+l-maxWidth;right=x+r+maxWidth;top=y+t-maxWidth;bottom=y+b+maxWidth;
         }
         private Stroke(long id,Stroke source,double[] sections){
             this.id=id;color=source.color;width=source.width;x=source.x;y=source.y;points=source.points;flattened=source.flattened;geometry=source.geometry;data=source.data;
+            variableWidth = source.variableWidth;
+            maxWidth = source.maxWidth;
             left=source.left;top=source.top;right=source.right;bottom=source.bottom;this.sections=sections;previousRender=source.renderState!=null?source.renderState:source.previousRender;
         }
         StrokeData data(){if(data==null)data=new StrokeData(pathPoints());return data;}
-        public float[] pathPoints(){if(flattened)return points;if(geometry==null)geometry=StrokeGeometry.smooth(points,width);return geometry;}
-        public Stroke offset(long id,double dx,double dy){Stroke copy=new Stroke(id,color,width,x+dx,y+dy,points,flattened,sections);copy.geometry=geometry;copy.data=data;copy.renderState=renderState;copy.previousRender=previousRender;return copy;}
+        public float[] pathPoints(){if(flattened)return points;if(geometry==null)geometry=StrokeGeometry.smooth(points,width,variableWidth);return geometry;}
+        public Stroke offset(long id,double dx,double dy){Stroke copy=new Stroke(id,color,width,x+dx,y+dy,points,flattened,sections,variableWidth);copy.geometry=geometry;copy.data=data;copy.renderState=renderState;copy.previousRender=previousRender;return copy;}
         boolean hasFlattenedGeometry() { return flattened || sections != null; }
 
         Stroke scaled(double anchorX, double anchorY, double factor) {
@@ -38,12 +50,12 @@ public final class Ink {
                 scaled[i + 1] *= factor;
             }
             return new Stroke(id, color, (float) (width * factor), anchorX + (x - anchorX) * factor,
-                    anchorY + (y - anchorY) * factor, scaled, true, sections);
+                    anchorY + (y - anchorY) * factor, scaled, true, sections, variableWidth);
         }
         public boolean intersects(double l,double t,double r,double b){return right>=l&&left<=r&&bottom>=t&&top<=b;}
         public boolean crossesRect(double l,double t,double r,double b){
             float[] points=pathPoints();
-            l-=width/2;t-=width/2;r+=width/2;b+=width/2;if(!intersects(l,t,r,b))return false;
+            l-=maxWidth/2;t-=maxWidth/2;r+=maxWidth/2;b+=maxWidth/2;if(!intersects(l,t,r,b))return false;
             double px=x+points[0],py=y+points[1];if(px>=l&&px<=r&&py>=t&&py<=b&&StrokeData.visible(sections,0,0))return true;
             for(int i=3;i<points.length;i+=3){double nx=x+points[i],ny=y+points[i+1],dx=nx-px,dy=ny-py,low=0,high=1;
                 if(dx==0){if(px<l||px>r){px=nx;py=ny;continue;}}else{double a=(l-px)/dx,c=(r-px)/dx;low=Math.max(low,Math.min(a,c));high=Math.min(high,Math.max(a,c));}
@@ -55,24 +67,26 @@ public final class Ink {
             float[] points=pathPoints();
             if(!intersects(wx-tolerance,wy-tolerance,wx+tolerance,wy+tolerance))return false;
             double px=points[0]+x,py=points[1]+y;
-            if(Math.hypot(wx-px,wy-py)<=tolerance+width/2&&StrokeData.visible(sections,0,0))return true;
+            if(Math.hypot(wx-px,wy-py)<=tolerance+width*(variableWidth?points[2]:1)/2&&StrokeData.visible(sections,0,0))return true;
             for(int i=3;i<points.length;i+=3){double nx=points[i]+x,ny=points[i+1]+y;
                 double vx=nx-px,vy=ny-py,den=vx*vx+vy*vy;
                 double u=den==0?0:Math.max(0,Math.min(1,((wx-px)*vx+(wy-py)*vy)/den));
-                if(Math.hypot(wx-px-u*vx,wy-py-u*vy)<=tolerance+width/2&&StrokeData.visible(sections,i/3.0-1+u,i/3.0-1+u))return true;px=nx;py=ny;
+                double radius = width / 2 * (variableWidth ? points[i - 1] + u * (points[i + 2] - points[i - 1]) : 1);
+                if(Math.hypot(wx-px-u*vx,wy-py-u*vy)<=tolerance+radius&&StrokeData.visible(sections,i/3.0-1+u,i/3.0-1+u))return true;px=nx;py=ny;
             }return false;
         }
 
         boolean crossesLasso(Lasso lasso) {
             if (!intersects(lasso.left, lasso.top, lasso.right, lasso.bottom)) return false;
             StrokeData geometry = data();
-            double radius = width / 2;
             int count = sections == null ? 2 : sections.length;
             for (int range = 0; range < count; range += 2) {
                 double start = sections == null ? 0 : sections[range];
                 double end = sections == null ? geometry.segments : sections[range + 1];
                 do {
                     double next = Math.min(end, Math.floor(start) + 1);
+                    double radius = width / 2 * (variableWidth
+                            ? Math.max(geometry.coordinate(start, 2), geometry.coordinate(next, 2)) : 1);
                     if (lasso.intersectsStrokeSegment(x + geometry.coordinate(start, 0),
                             y + geometry.coordinate(start, 1), x + geometry.coordinate(next, 0),
                             y + geometry.coordinate(next, 1), radius)) return true;
@@ -132,11 +146,12 @@ public final class Ink {
         for(Stroke s:strokes){
             if(!s.intersects(left,top,right,bottom)){if(next!=null)next.add(s);index++;continue;}
             double[] sections;
-            if(s.pathPoints().length==3){if(Eraser.distanceSquared(s.points[0],s.points[1],ax-s.x,ay-s.y,bx-s.x,by-s.y)>(radius+s.width/2)*(radius+s.width/2)){if(next!=null)next.add(s);index++;continue;}sections=new double[0];}
-            else sections=s.data().erase(s.sections,ax-s.x,ay-s.y,bx-s.x,by-s.y,radius+s.width/2);
+            if(s.pathPoints().length==3){if(Eraser.distanceSquared(s.points[0],s.points[1],ax-s.x,ay-s.y,bx-s.x,by-s.y)>(radius+s.maxWidth/2)*(radius+s.maxWidth/2)){if(next!=null)next.add(s);index++;continue;}sections=new double[0];}
+            else sections=s.data().erase(s.sections,ax-s.x,ay-s.y,bx-s.x,by-s.y,radius,
+                    s.width / 2, s.variableWidth, s.maxWidth / 2);
             if(sections==s.sections){if(next!=null)next.add(s);index++;continue;}
             if(next==null){next=new ArrayList<>(strokes.size());next.addAll(strokes.subList(0,index));}
-            erasePadding=Math.max(erasePadding,s.width);selected.remove(s.id);if(sections.length>0)next.add(new Stroke(nextId(),s,sections));index++;
+            erasePadding=Math.max(erasePadding,s.maxWidth);selected.remove(s.id);if(sections.length>0)next.add(new Stroke(nextId(),s,sections));index++;
         }
         if(next==null)return false;strokes.clear();strokes.addAll(next);revision++;return true;
     }

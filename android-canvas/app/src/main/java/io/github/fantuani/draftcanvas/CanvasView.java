@@ -17,11 +17,13 @@ public final class CanvasView extends View {
     static final float GRID_STEP_DP = 32f;
     static final float GRID_DOT_DP = 1.6f;
     static final int MAX_PEN_PRESSURE_THRESHOLD = 200;
+    static final float DEFAULT_PEN_SENSITIVITY = 1f;
     private static final float MAX_RAW_PEN_PRESSURE = 4095f;
     private static final float RESIZE_HANDLE_DP = 20f;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     private float penPressureThreshold;
+    float penSensitivity = DEFAULT_PEN_SENSITIVITY;
     public Runnable changed=()->{};
     private boolean fingerTap;
     private boolean navigationBlocked;
@@ -61,7 +63,7 @@ public final class CanvasView extends View {
     private double startX,startY,dragX,dragY;
     private final LiveStroke liveStroke = new LiveStroke();
     private double strokeX,strokeY;
-    private int strokeColor;private float strokeWidth;
+    private int strokeColor;private float strokeWidth,strokeSensitivity;
     private boolean fingers;private int fingerCount;private float prevX,prevY,prevDistance;
     private double gestureX,gestureY,gestureScale;
     private final Viewport.Pinch pinch = new Viewport.Pinch();
@@ -193,7 +195,7 @@ public final class CanvasView extends View {
             c.translate(screenX(strokeX), screenY(strokeY));
             c.scale((float)ink.view.scale, (float)ink.view.scale);
             setStrokePaint(strokeColor, strokeWidth);
-            liveStroke.draw(c, paint, strokeWidth);
+            liveStroke.draw(c, paint, strokeWidth, ink.view.scale, strokeSensitivity > 0);
             c.restore();
         }
         drawLasso(c);
@@ -303,27 +305,33 @@ public final class CanvasView extends View {
         }
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeWidth(diameter);paint.setColor(0xFFB9C4BC);c.drawPoints(gridPoints,0,gridCount,paint);
     }
-    private Path sectionPath(StrokeData data,double start,double end){
-        Path path=new Path();path.moveTo(data.coordinate(start,0),data.coordinate(start,1));
+    private Path sectionPath(Ink.Stroke stroke,StrokeData data,double start,double end){
+        Path path=new Path();
+        if (stroke.variableWidth) {
+            PressurePath.append(path, data, start, end, stroke.width / 2);
+            return path;
+        }
+        path.moveTo(data.coordinate(start,0),data.coordinate(start,1));
         for(int i=(int)Math.floor(start)+1;i<end;i++)path.lineTo(data.points[i*3],data.points[i*3+1]);
         path.lineTo(data.coordinate(end,0),data.coordinate(end,1));return path;
     }
     private void drawSections(android.graphics.Canvas c,Ink.Stroke s,StrokeData data,StrokeData.Node node,double l,double t,double r,double b){
-        float padding=s.width/2;
+        float padding=s.maxWidth/2;
         if(node.right+padding<l||node.left-padding>r||node.bottom+padding<t||node.top-padding>b||!StrokeData.visible(s.sections,node.start,node.end))return;
         int index=s.sections==null?0:StrokeData.first(s.sections,node.start);
         boolean full=s.sections==null||index<s.sections.length&&s.sections[index]<=node.start&&s.sections[index+1]>=node.end;
         if(full&&((node.left>=l&&node.right<=r&&node.top>=t&&node.bottom<=b)||node.end-node.start<=32)){
-            if(node.renderPath==null)node.renderPath=sectionPath(data,node.start,node.end);c.drawPath((Path)node.renderPath,paint);return;
+            if(node.renderPath==null)node.renderPath=sectionPath(s,data,node.start,node.end);c.drawPath((Path)node.renderPath,paint);return;
         }
         if(node.a!=null){drawSections(c,s,data,node.a,l,t,r,b);drawSections(c,s,data,node.b,l,t,r,b);return;}
-        if(s.sections==null){if(node.renderPath==null)node.renderPath=sectionPath(data,node.start,node.end);c.drawPath((Path)node.renderPath,paint);return;}
+        if(s.sections==null){if(node.renderPath==null)node.renderPath=sectionPath(s,data,node.start,node.end);c.drawPath((Path)node.renderPath,paint);return;}
         RenderState state=s.renderState instanceof RenderState?(RenderState)s.renderState:new RenderState(s.previousRender instanceof RenderState?(RenderState)s.previousRender:null);s.renderState=state;s.previousRender=null;
-        for(int i=index;i<s.sections.length&&s.sections[i]<node.end;i+=2){double a=Math.max(node.start,s.sections[i]),z=Math.min(node.end,s.sections[i+1]);if(z-a<1e-9)continue;SectionKey key=new SectionKey(a,z);Path p=state.partial.get(key);if(p==null){p=state.previous.get(key);if(p==null)p=sectionPath(data,a,z);state.partial.put(key,p);}c.drawPath(p,paint);}
+        for(int i=index;i<s.sections.length&&s.sections[i]<node.end;i+=2){double a=Math.max(node.start,s.sections[i]),z=Math.min(node.end,s.sections[i+1]);if(z-a<1e-9)continue;SectionKey key=new SectionKey(a,z);Path p=state.partial.get(key);if(p==null){p=state.previous.get(key);if(p==null)p=sectionPath(s,data,a,z);state.partial.put(key,p);}c.drawPath(p,paint);}
     }
     private void drawStrokeShape(Canvas c, Ink.Stroke s, double l, double t, double r, double b) {
         setStrokePaint(s.color, s.width);
-        if(s.points.length==3){paint.setStyle(Paint.Style.FILL);c.drawCircle(s.points[0],s.points[1],s.width/2,paint);}
+        if (s.variableWidth || s.points.length == 3) paint.setStyle(Paint.Style.FILL);
+        if(s.points.length==3){c.drawCircle(s.points[0],s.points[1],s.maxWidth/2,paint);}
         else {StrokeData data=s.data();drawSections(c,s,data,data.root,l,t,r,b);}
     }
     private void setStrokePaint(int color, float width) {
@@ -405,14 +413,17 @@ public final class CanvasView extends View {
             strokeY = y;
             strokeColor = color;
             strokeWidth = (float) (width / ink.view.scale);
+            strokeSensitivity = penSensitivity;
         }
-        return liveStroke.add((float) (x - strokeX), (float) (y - strokeY), ink.view.scale, strokeWidth);
+        float multiplier = StrokeGeometry.pressureWidth(pressure, strokeSensitivity);
+        return liveStroke.add((float) (x - strokeX), (float) (y - strokeY), ink.view.scale,
+                strokeWidth, multiplier, strokeSensitivity > 0);
     }
 
     private boolean commitLiveStroke() {
         if (liveStroke.isEmpty()) return false;
         Ink.Stroke stroke = new Ink.Stroke(ink.nextId(), strokeColor, strokeWidth, strokeX, strokeY,
-                liveStroke.copyPoints());
+                liveStroke.copyPoints(), false, null, strokeSensitivity > 0);
         liveStroke.clear();
         ink.add(stroke);
         if (raster != null) {

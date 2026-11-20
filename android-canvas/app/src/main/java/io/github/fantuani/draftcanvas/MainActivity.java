@@ -11,6 +11,8 @@ import java.util.*;
 public final class MainActivity extends Activity {
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70;
     private static final String PEN_PRESSURE_THRESHOLD = "pen_pressure_threshold";
+    private static final String PEN_SENSITIVITY = "pen_sensitivity";
+    private static final float MAX_PEN_SENSITIVITY = 2f;
     CanvasView canvas;
     private DraftStore draftStore;
     private SharedPreferences toolSizes;
@@ -48,6 +50,7 @@ public final class MainActivity extends Activity {
         float density = getResources().getDisplayMetrics().density;
         canvas.width = toolSizes.getFloat("pen_width_dp", 2.3f) * density;
         canvas.setPenPressureThreshold(toolSizes.getInt(PEN_PRESSURE_THRESHOLD, 0));
+        canvas.penSensitivity = toolSizes.getFloat(PEN_SENSITIVITY, CanvasView.DEFAULT_PEN_SENSITIVITY);
         canvas.setEraserSize(toolSizes.getFloat("eraser_size_dp", 24f) * density);
         canvas.eraserSensitivity = toolSizes.getFloat("eraser_sensitivity", 2f);
         root.addView(canvas, new FrameLayout.LayoutParams(-1, -1));
@@ -240,12 +243,28 @@ public final class MainActivity extends Activity {
     private void showWidths(){
         float density=getResources().getDisplayMetrics().density;
         LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(24),dp(8),dp(24),dp(8));panel.setMinimumWidth(dp(340));
-        View preview=new View(this){private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);@Override protected void onDraw(android.graphics.Canvas c){
-            float y=getHeight()/2f;p.setColor(canvas.color);p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeWidth(canvas.width);c.drawLine(getWidth()*.08f,y,getWidth()*.45f,y,p);
+        View preview=new View(this){
+            private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final Path sample = new Path();
+            @Override protected void onDraw(android.graphics.Canvas c){
+            float y=getHeight()/2f, start=getWidth()*.08f, end=getWidth()*.45f;
+            float r1=canvas.width*StrokeGeometry.pressureWidth(.04f,canvas.penSensitivity)/2;
+            float r2=canvas.width*StrokeGeometry.pressureWidth(.85f,canvas.penSensitivity)/2;
+            p.setColor(canvas.color);p.setStyle(Paint.Style.FILL);
+            sample.rewind();
+            sample.addCircle(start,y,r1,Path.Direction.CCW);
+            PressurePath.quadratic(sample,start,y,r1,(start+end)/2,y,(r1+r2)/2,end,y,r2,end-start);
+            c.drawPath(sample,p);
             p.setStyle(Paint.Style.FILL);p.setColor(0x10167B70);c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);p.setStyle(Paint.Style.STROKE);p.setColor(TEAL);p.setStrokeWidth(dp(1));c.drawCircle(getWidth()*.75f,y,canvas.eraserSize/2,p);
         }};
         panel.addView(preview,new LinearLayout.LayoutParams(-1,dp(110)));
         panel.addView(sizeControl("笔粗细",.3f,10,.1f,canvas.width/density,"%.1f",value->{canvas.width=value*density;toolSizes.edit().putFloat("pen_width_dp",value).apply();preview.invalidate();}));
+        panel.addView(sizeControl("书写压感灵敏度", 0, MAX_PEN_SENSITIVITY, .1f, canvas.penSensitivity,
+                "%.1f", value -> {
+                    canvas.penSensitivity = value;
+                    toolSizes.edit().putFloat(PEN_SENSITIVITY, value).apply();
+                    preview.invalidate();
+                }));
         panel.addView(sizeControl("书写力度阈值", 0, CanvasView.MAX_PEN_PRESSURE_THRESHOLD, 1,
                 toolSizes.getInt(PEN_PRESSURE_THRESHOLD, 0), "%.0f", value -> {
                     int level = Math.round(value);

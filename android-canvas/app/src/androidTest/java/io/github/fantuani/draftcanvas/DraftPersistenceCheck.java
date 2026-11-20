@@ -33,7 +33,7 @@ final class DraftPersistenceCheck {
                     ink.erase(350, -58, 350, -38, 10);
                     ink.commit();
                     Ink.Stroke second = new Ink.Stroke(ink.nextId(), 0xff243137, 3, 600, 700,
-                            new float[]{0,0,1,15,20,1,30,0,1});
+                            new float[]{0,0,.7f,15,20,1.4f,30,0,1.2f}, false, null, true);
                     ink.add(second);
                     ink.selected.add(second.id);
                     ink.resizeSelection(550, 650, 2);
@@ -60,6 +60,9 @@ final class DraftPersistenceCheck {
                 Ink.Stroke resized = ink.strokes.get(1);
                 check(resized.x == 650 && resized.y == 750 && resized.width == 6 && resized.hasFlattenedGeometry(),
                         "Restoring the draft must preserve the resized geometry");
+                check(resized.variableWidth && resized.points[2] == .7f
+                                && resized.points[resized.points.length - 1] == 1.2f,
+                        "Restoring the draft must preserve the pressure profile");
                 check(ink.view.x == 144 && ink.view.y == -84.5 && ink.view.scale == 2.5,
                         "Wrong restored viewport");
                 if ("clear".equals(phase)) {
