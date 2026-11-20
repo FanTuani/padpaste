@@ -66,16 +66,6 @@ public final class MainActivity extends Activity {
         label.setMarginStart(dp(16));
         label.bottomMargin = dp(1);
         root.addView(zoom, label);
-        TextView sync = action("截图同步", () -> startActivity(
-                new Intent(this, io.github.fantuani.padpaste.MainActivity.class)));
-        sync.setTextSize(13);
-        sync.setTextColor(0xFF7F8C8C);
-        sync.setPadding(dp(14), 0, dp(14), 0);
-        FrameLayout.LayoutParams syncPosition = new FrameLayout.LayoutParams(
-                -2, dp(48), Gravity.BOTTOM | Gravity.END);
-        syncPosition.setMarginEnd(dp(10));
-        syncPosition.bottomMargin = dp(1);
-        root.addView(sync, syncPosition);
         canvas.changed = () -> {
             updateZoom();
             draftStore.observe();
@@ -138,6 +128,9 @@ public final class MainActivity extends Activity {
                 break;
             case FanMenu.OVERVIEW:
                 canvas.overview();
+                break;
+            case FanMenu.SYNC:
+                startActivity(new Intent(this, io.github.fantuani.padpaste.MainActivity.class));
                 break;
             case FanMenu.COPY:
                 ink.copy();

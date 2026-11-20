@@ -20,9 +20,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 final class FanMenu extends ViewGroup {
-    static final int SIZE = 1, CLEAR = 2, COPY = 3, PASTE = 4, DELETE = 5, CANCEL = 6, SELECT = 7, OVERVIEW = 8;
+    static final int SIZE = 1, CLEAR = 2, COPY = 3, PASTE = 4, DELETE = 5, CANCEL = 6, SELECT = 7, OVERVIEW = 8, SYNC = 9;
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70, RED = 0xFFAA5148;
-    private static final float[] TOOLS = {-178, -149, -120, -91, 151, 114, 66, 29};
+    private static final float[] TOOLS = {-178, -149, -120, -91, 151, 114, 66, 29, -2};
     private static final float[] SELECTION = {-165, -126, -87, -48};
     private static final PathInterpolator OPEN = new PathInterpolator(.18f, .76f, .22f, 1f);
     private static final PathInterpolator CLOSE = new PathInterpolator(.36f, 0f, .72f, .54f);
@@ -64,6 +64,7 @@ final class FanMenu extends ViewGroup {
         command("粗细", SIZE, true);
         command("清空", CLEAR, hasInk);
         command("总览", OVERVIEW, true);
+        command("同步", SYNC, true);
         open();
     }
 
@@ -312,7 +313,7 @@ final class FanMenu extends ViewGroup {
         else {
             band(canvas, -178, 87);
             band(canvas, 114, 37);
-            band(canvas, 29, 37);
+            band(canvas, -2, 68);
         }
         canvas.restore();
         if (confirmation != null && morph > 0) {
@@ -457,6 +458,12 @@ final class FanMenu extends ViewGroup {
                 case OVERVIEW:
                     canvas.drawRoundRect(-8, -6, 8, 6, 1.5f, 1.5f, ink);
                     canvas.drawRect(-3, -2, 3, 2, ink);
+                    break;
+                case SYNC:
+                    canvas.drawLines(new float[]{
+                            -7, -4, 7, -4, 3, -8, 7, -4, 3, 0, 7, -4,
+                            7, 4, -7, 4, -3, 0, -7, 4, -3, 8, -7, 4
+                    }, ink);
                     break;
                 case COPY:
                     canvas.drawRoundRect(-3, -4, 7, 7, 1.5f, 1.5f, ink);
