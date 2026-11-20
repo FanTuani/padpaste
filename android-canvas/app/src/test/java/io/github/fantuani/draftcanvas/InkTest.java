@@ -5,10 +5,15 @@ public class InkTest {
     @Test public void importedQuestionsAvoidExistingInkAndUseNormalHistory() {
         Ink ink = new Ink();
         ink.add(new Ink.Stroke(ink.nextId(), 0xff000000, 4, -475, -245, new float[]{0,0,1,160,0,1}));
-        QuestionImage first = ink.importQuestion("a", 600, 400, 1000, 600, 30, 0);
+        QuestionImage placement = ink.previewQuestion(600, 400, 1000, 600, 30, 0);
+        assertTrue(ink.questions.isEmpty());
+        ink.view.pan(120, 80);
+        QuestionImage first = ink.importQuestion("a", placement);
+        assertEquals(placement.x, first.x, 0);
+        assertEquals(placement.y, first.y, 0);
         Ink.Stroke existing = ink.strokes.get(0);
         assertFalse(first.intersects(existing.left, existing.top, existing.right, existing.bottom));
-        QuestionImage next = ink.importQuestion("b", 600, 400, 1000, 600, 30, first.id);
+        QuestionImage next = ink.importQuestion("b", ink.previewQuestion(600, 400, 1000, 600, 30, first.id));
         assertEquals(first.x, next.x, 0);
         assertTrue(next.y > first.bottom());
         ink.select(next.x - 1, next.y - 1, next.right() + 1, next.bottom() + 1);

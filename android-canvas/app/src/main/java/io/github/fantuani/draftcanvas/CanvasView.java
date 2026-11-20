@@ -36,6 +36,11 @@ public final class CanvasView extends View {
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint photoPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final RectF photoBounds = new RectF();
+    private final RectF offerBounds = new RectF();
+    private QuestionImage questionOffer;
+    private Bitmap questionOfferBitmap;
+    private float offerAlpha, offerScale, offerLift;
+    private long offerImportId;
     QuestionAssets questionAssets;
     private long selectedQuestionId;
     private PhotoGesture photoGesture;
@@ -235,6 +240,7 @@ public final class CanvasView extends View {
     private void drawQuestions(Canvas canvas) {
         if (questionAssets == null) return;
         for (QuestionImage question : ink.questions) {
+            if (questionOffer != null && question.id == offerImportId) continue;
             if (photoGesture != null && photoGesture.preview != null && photoGesture.original.id == question.id) {
                 question = photoGesture.preview;
             }
@@ -248,6 +254,34 @@ public final class CanvasView extends View {
             Bitmap bitmap = questionAssets.visible(question.asset, this::postInvalidateOnAnimation);
             if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
         }
+        if (questionOffer != null) {
+            questionBounds(questionOffer, offerBounds);
+            canvas.save();
+            canvas.translate(0, offerLift);
+            canvas.scale(offerScale, offerScale, offerBounds.centerX(), offerBounds.centerY());
+            photoPaint.setAlpha(Math.max(0, Math.min(255, Math.round(255 * offerAlpha))));
+            canvas.drawBitmap(questionOfferBitmap, null, offerBounds, photoPaint);
+            photoPaint.setAlpha(255);
+            canvas.restore();
+        }
+    }
+
+    void questionBounds(QuestionImage image, RectF bounds) {
+        bounds.set(screenX(image.x), screenY(image.y), screenX(image.right()), screenY(image.bottom()));
+    }
+
+    void showQuestionOffer(QuestionImage image, Bitmap bitmap, long importedId) {
+        questionOffer = image;
+        questionOfferBitmap = bitmap;
+        offerImportId = importedId;
+        postInvalidateOnAnimation();
+    }
+
+    void styleQuestionOffer(float alpha, float scale, float lift) {
+        offerAlpha = alpha;
+        offerScale = scale;
+        offerLift = lift;
+        postInvalidateOnAnimation();
     }
 
     boolean canImportQuestion() {
@@ -317,11 +351,6 @@ public final class CanvasView extends View {
         if (photoGesture == null) return;
         photoGesture = null;
         postInvalidateOnAnimation();
-    }
-
-    boolean questionVisible(QuestionImage question) {
-        return screenX(question.x) >= 0 && screenY(question.y) >= 0
-                && screenX(question.right()) <= getWidth() && screenY(question.bottom()) <= getHeight();
     }
 
     void locateQuestion(QuestionImage question) {

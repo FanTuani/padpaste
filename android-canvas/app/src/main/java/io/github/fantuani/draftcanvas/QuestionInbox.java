@@ -1,10 +1,14 @@
 package io.github.fantuani.draftcanvas;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
@@ -13,10 +17,10 @@ import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
+import android.view.animation.OvershootInterpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -29,7 +33,11 @@ final class QuestionInbox implements QuestionConnection.Listener {
     private final QuestionAssets assets;
     private final SharedPreferences preferences;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final LinearLayout prompt;
+    private final TextView importButton, cancelButton, locateButton;
+    private final RectF bounds = new RectF();
+    private QuestionImage placement;
+    private ValueAnimator motion;
+    private float offerAlpha, offerScale, offerLift, controlsAlpha;
     private QuestionConnection connection;
     private AlertDialog syncDialog;
     private QuestionConnection.Candidate candidate;
@@ -44,20 +52,19 @@ final class QuestionInbox implements QuestionConnection.Listener {
         this.preferences = activity.getSharedPreferences("question_link", Activity.MODE_PRIVATE);
         canvas.questionAssets = assets;
 
-        prompt = new LinearLayout(activity);
-        prompt.setGravity(Gravity.CENTER_VERTICAL);
-        prompt.setPadding(dp(12), dp(8), dp(8), dp(8));
-        GradientDrawable surface = new GradientDrawable();
-        surface.setColor(0xFFFFFEFA);
-        surface.setCornerRadius(dp(18));
-        surface.setStroke(dp(1), 0xFFE2E8E3);
-        prompt.setBackground(surface);
-        prompt.setElevation(dp(5));
-        FrameLayout.LayoutParams position = new FrameLayout.LayoutParams(-2, -2,
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        position.bottomMargin = dp(25);
-        root.addView(prompt, position);
-        prompt.setVisibility(View.GONE);
+        FrameLayout overlay = new FrameLayout(activity);
+        overlay.setClipChildren(false);
+        root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+        overlay.setElevation(dp(5));
+        importButton = button(overlay, "导入", Color.WHITE, 0xFF167B70, 74, this::accept);
+        cancelButton = button(overlay, "取消", 0xFF40524E, 0xF5FFFEFA, 62, this::cancelOffer);
+        locateButton = button(overlay, "查看题图", 0xFF167B70, 0xFFFFFEFA, 92, () -> {
+            if (placement != null) canvas.locateQuestion(placement);
+        });
+        canvas.getViewTreeObserver().addOnPreDrawListener(() -> {
+            positionControls();
+            return true;
+        });
     }
 
     void start() {
@@ -141,29 +148,75 @@ final class QuestionInbox implements QuestionConnection.Listener {
     }
 
     private void showCandidate() {
-        if (candidate == null) { hidePrompt(); return; }
-        prompt.removeAllViews();
-        ImageView thumbnail = new ImageView(activity);
-        thumbnail.setImageBitmap(candidate.bitmap());
-        thumbnail.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        thumbnail.setContentDescription("收到的图片预览");
-        prompt.addView(thumbnail, new LinearLayout.LayoutParams(dp(58), dp(44)));
-        prompt.addView(label("电脑图片", 0xFF243137));
-        TextView ignore = action("忽略", 0xFF596A68, () -> {
-            candidate = null;
-            hidePrompt();
-        });
-        prompt.addView(ignore);
-        prompt.addView(action("导入", 0xFF167B70, this::accept));
-        prompt.setVisibility(View.VISIBLE);
+        if (candidate == null || importing || canvas.getWidth() == 0 || canvas.getHeight() == 0) return;
+        long now = SystemClock.elapsedRealtime();
+        placement = canvas.ink.previewQuestion(candidate.bitmap().getWidth(), candidate.bitmap().getHeight(),
+                canvas.getWidth(), canvas.getHeight(), dp(36), now - lastImport < 120_000 ? previousId : 0);
+        canvas.showQuestionOffer(placement, candidate.bitmap(), 0);
+        style(0, .92f, dp(12), 0);
+        animate(230, true, t -> {
+            float visible = Math.min(1, t);
+            style(.64f * visible, .92f + .08f * t, dp(12) * (1 - t), visible);
+        }, () -> style(.64f, 1, 0, 1));
+    }
+
+    private void positionControls() {
+        if (placement == null && candidate != null && !importing) showCandidate();
+        boolean inline = false;
+        boolean pending = placement != null && candidate != null && !importing;
+        if (placement != null && (pending || controlsAlpha > 0)) {
+            canvas.questionBounds(placement, bounds);
+            inline = bounds.centerX() >= 0 && bounds.centerX() <= canvas.getWidth()
+                    && bounds.centerY() >= 0 && bounds.centerY() <= canvas.getHeight();
+        }
+        importButton.setEnabled(pending);
+        cancelButton.setEnabled(pending);
+        visibility(importButton, inline);
+        visibility(cancelButton, inline);
+        visibility(locateButton, pending && !inline);
+        if (inline) {
+            float x = bounds.centerX(), y = bounds.centerY() + offerLift;
+            float gap = dp(8);
+            float offset = (importButton.getMeasuredWidth() + cancelButton.getMeasuredWidth()) / 2f + gap;
+            float cancelX = x + offset + cancelButton.getMeasuredWidth() / 2f <= canvas.getWidth()
+                    ? x + offset : x - offset;
+            position(importButton, x, y);
+            position(cancelButton, cancelX, y);
+        } else if (pending) {
+            position(locateButton, bounds.centerX(), bounds.centerY());
+        }
+    }
+
+    private void visibility(View view, boolean visible) {
+        int state = visible ? View.VISIBLE : View.INVISIBLE;
+        if (view.getVisibility() != state) view.setVisibility(state);
+    }
+
+    private void position(View view, float x, float y) {
+        float halfWidth = view.getMeasuredWidth() / 2f, halfHeight = view.getMeasuredHeight() / 2f;
+        float edge = dp(8);
+        view.setTranslationX(Math.max(edge, Math.min(canvas.getWidth() - edge - 2 * halfWidth, x - halfWidth)));
+        view.setTranslationY(Math.max(edge, Math.min(canvas.getHeight() - edge - 2 * halfHeight, y - halfHeight)));
+    }
+
+    private void cancelOffer() {
+        if (candidate == null || importing) return;
+        candidate = null;
+        float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
+        animate(120, false, t -> style(startAlpha * (1 - t), startScale - .03f * t,
+                startLift + dp(6) * t, startControls * (1 - t)), this::clearOffer);
+        canvas.postInvalidateOnAnimation();
     }
 
     private void accept() {
-        if (candidate == null || importing) return;
+        if (candidate == null || placement == null || importing) return;
         QuestionConnection.Candidate accepted = candidate;
+        QuestionImage target = placement;
         candidate = null;
         importing = true;
-        hidePrompt();
+        float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
+        animate(125, false, t -> style(startAlpha + (.83f - startAlpha) * t,
+                startScale + (1 - startScale) * t, startLift * (1 - t), startControls * (1 - t)), () -> {});
         assets.save(accepted.data(), accepted.bitmap(), asset -> {
             if (asset == null) {
                 importing = false;
@@ -171,61 +224,86 @@ final class QuestionInbox implements QuestionConnection.Listener {
                 showCandidate();
                 toast("题图保存失败");
             } else {
-                place(asset, accepted.bitmap().getWidth(), accepted.bitmap().getHeight());
+                place(asset, target, accepted);
             }
         });
     }
 
-    private void place(String asset, int width, int height) {
+    private void place(String asset, QuestionImage target, QuestionConnection.Candidate accepted) {
         if (!canvas.canImportQuestion()) {
-            main.postDelayed(() -> place(asset, width, height), 60);
+            main.postDelayed(() -> place(asset, target, accepted), 60);
             return;
         }
-        long now = SystemClock.elapsedRealtime();
-        QuestionImage image = canvas.ink.importQuestion(asset, width, height, canvas.getWidth(),
-                canvas.getHeight(), dp(36), now - lastImport < 120_000 ? previousId : 0);
+        QuestionImage image = canvas.ink.importQuestion(asset, target);
         previousId = image.id;
-        canvas.selectQuestion(image);
-        lastImport = now;
-        importing = false;
+        lastImport = SystemClock.elapsedRealtime();
+        canvas.showQuestionOffer(target, accepted.bitmap(), image.id);
         canvas.refresh();
         draftStore.flush();
-        if (candidate != null) showCandidate();
-        else if (active && !canvas.questionVisible(image)) showLocate(image);
+        float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
+        animate(175, false, t -> style(startAlpha + (1 - startAlpha) * t, startScale + (1 - startScale) * t,
+                startLift * (1 - t), startControls * (1 - t)), () -> {
+            clearOffer();
+            canvas.selectQuestion(image);
+            importing = false;
+            showCandidate();
+        });
     }
 
-    private void showLocate(QuestionImage image) {
-        prompt.removeAllViews();
-        prompt.addView(label("题图已导入", Color.DKGRAY));
-        prompt.addView(action("定位", 0xFF167B70, () -> {
-            QuestionImage current = canvas.ink.question(image.id);
-            if (current != null && canvas.canImportQuestion()) canvas.locateQuestion(current);
-            prompt.setVisibility(View.GONE);
-        }));
-        prompt.addView(action("关闭", 0xFF596A68, () -> prompt.setVisibility(View.GONE)));
-        prompt.setVisibility(View.VISIBLE);
+    private void style(float alpha, float scale, float lift, float controls) {
+        offerAlpha = alpha;
+        offerScale = scale;
+        offerLift = lift;
+        controlsAlpha = controls;
+        canvas.styleQuestionOffer(alpha, scale, lift);
+        float buttonScale = .91f + .09f * controlsAlpha;
+        for (TextView button : new TextView[]{importButton, cancelButton, locateButton}) {
+            button.setAlpha(controlsAlpha);
+            button.setScaleX(buttonScale);
+            button.setScaleY(buttonScale);
+        }
     }
 
-    private TextView label(String title, int color) {
-        TextView label = new TextView(activity);
-        label.setText(title);
-        label.setTextSize(14);
-        label.setTextColor(color);
-        label.setGravity(Gravity.CENTER);
-        label.setPadding(dp(12), 0, dp(12), 0);
-        label.setMinHeight(dp(44));
-        return label;
+    private void clearOffer() {
+        placement = null;
+        canvas.showQuestionOffer(null, null, 0);
     }
 
-    private void hidePrompt() {
-        prompt.setVisibility(View.GONE);
-        prompt.removeAllViews();
+    private void animate(long duration, boolean spring, java.util.function.Consumer<Float> update, Runnable end) {
+        ValueAnimator next = ValueAnimator.ofFloat(0, 1);
+        ValueAnimator previous = motion;
+        motion = next;
+        if (previous != null) previous.cancel();
+        next.setDuration(duration);
+        next.setInterpolator(spring ? new OvershootInterpolator(.95f) : new PathInterpolator(.2f, .74f, .24f, 1f));
+        next.addUpdateListener(frame -> update.accept((Float) frame.getAnimatedValue()));
+        next.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(Animator animation) {
+                if (motion != next) return;
+                motion = null;
+                end.run();
+            }
+        });
+        next.start();
     }
 
-    private TextView action(String title, int color, Runnable callback) {
-        TextView button = label(title, color);
+    private TextView button(FrameLayout overlay, String title, int color, int background, int width, Runnable callback) {
+        TextView button = new TextView(activity);
+        button.setText(title);
+        button.setTextColor(color);
+        button.setTextSize(14);
+        button.setGravity(Gravity.CENTER);
         button.setTypeface(null, Typeface.BOLD);
+        GradientDrawable surface = new GradientDrawable();
+        surface.setColor(background);
+        surface.setCornerRadius(dp(20));
+        if (background != 0xFF167B70) surface.setStroke(dp(1), 0xFFE2E8E3);
+        button.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x1993AEA3), surface, null));
+        button.setElevation(dp(2));
         button.setOnClickListener(view -> callback.run());
+        button.setVisibility(View.INVISIBLE);
+        overlay.addView(button, new FrameLayout.LayoutParams(dp(width), dp(44)));
         return button;
     }
 

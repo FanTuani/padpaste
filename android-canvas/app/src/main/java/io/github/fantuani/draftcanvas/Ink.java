@@ -192,7 +192,7 @@ public final class Ink {
     boolean hasContent() { return !strokes.isEmpty() || !questions.isEmpty(); }
     public void clear(){if(!hasContent())return;begin();strokes.clear();questions.clear();selected.clear();commit();}
 
-    QuestionImage importQuestion(String asset, int pixelsWide, int pixelsHigh,
+    QuestionImage previewQuestion(int pixelsWide, int pixelsHigh,
                                  int screenWidth, int screenHeight, double padding, long previous) {
         double width = Math.min(screenWidth * .48, screenHeight * .62 * pixelsWide / pixelsHigh) / view.scale;
         double height = width * pixelsHigh / pixelsWide;
@@ -227,7 +227,12 @@ public final class Ink {
                 }
             }
         } while (moved);
-        QuestionImage image = new QuestionImage(nextId(), asset, x, y, width, height);
+        return new QuestionImage(0, null, x, y, width, height);
+    }
+
+    QuestionImage importQuestion(String asset, QuestionImage placement) {
+        QuestionImage image = new QuestionImage(nextId(), asset, placement.x, placement.y,
+                placement.width, placement.height);
         begin();
         questions.add(image);
         commit();
