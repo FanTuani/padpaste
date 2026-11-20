@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import ImageIO
 import Network
 import SystemConfiguration
@@ -41,8 +42,24 @@ final class QuestionLink {
 
     func pairingCode() -> String {
         let host = (SCDynamicStoreCopyLocalHostName(nil) as String?).map { $0 + ".local" } ?? ""
-        let addresses = Host.current().addresses.filter {
-            IPv4Address($0) != nil && !$0.hasPrefix("127.") && !$0.hasPrefix("169.254.")
+        var addresses: [String] = []
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&interfaces) == 0 {
+            defer { freeifaddrs(interfaces) }
+            var current = interfaces
+            while let pointer = current {
+                let interface = pointer.pointee
+                current = interface.ifa_next
+                guard let address = interface.ifa_addr, address.pointee.sa_family == AF_INET,
+                      interface.ifa_flags & UInt32(IFF_UP) != 0,
+                      interface.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else { continue }
+                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count),
+                               nil, 0, NI_NUMERICHOST) == 0 {
+                    let value = String(cString: host)
+                    if !addresses.contains(value) { addresses.append(value) }
+                }
+            }
         }
         let body: [String: Any] = [
             "host": host, "addresses": addresses, "key": keyData.base64EncodedString()

@@ -66,10 +66,6 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         do { configuration = try AppConfiguration.load() }
         catch { fputs("PadPaste: \(error.localizedDescription)\n", stderr); exit(1) }
         if CommandLine.arguments.contains("--check-config") { print("Configuration valid"); exit(0) }
-        if CommandLine.arguments.contains("--export-question-pairing") {
-            do { print(try QuestionLink().pairingCode()); exit(0) }
-            catch { fputs("Unable to export pairing.\n", stderr); exit(1) }
-        }
         makePanel()
         let nativeReceiver = FastScreenshotReceiver(configuration: configuration) { [weak self] name in
             guard let self else { return }
@@ -255,6 +251,11 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         finishTask = finish
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.flashDuration, execute: finish)
     }
+}
+
+if CommandLine.arguments.contains("--export-question-pairing") {
+    do { print(try QuestionLink().pairingCode()); exit(0) }
+    catch { fputs("Unable to export pairing.\n", stderr); exit(1) }
 }
 
 let app = NSApplication.shared
