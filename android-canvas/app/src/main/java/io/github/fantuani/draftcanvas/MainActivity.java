@@ -1,6 +1,7 @@
 package io.github.fantuani.draftcanvas;
 
 import android.app.*;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.*;
 import android.graphics.*;
@@ -65,6 +66,16 @@ public final class MainActivity extends Activity {
         label.setMarginStart(dp(16));
         label.bottomMargin = dp(1);
         root.addView(zoom, label);
+        TextView sync = action("截图同步", () -> startActivity(
+                new Intent(this, io.github.fantuani.padpaste.MainActivity.class)));
+        sync.setTextSize(13);
+        sync.setTextColor(0xFF7F8C8C);
+        sync.setPadding(dp(14), 0, dp(14), 0);
+        FrameLayout.LayoutParams syncPosition = new FrameLayout.LayoutParams(
+                -2, dp(48), Gravity.BOTTOM | Gravity.END);
+        syncPosition.setMarginEnd(dp(10));
+        syncPosition.bottomMargin = dp(1);
+        root.addView(sync, syncPosition);
         canvas.changed = () -> {
             updateZoom();
             draftStore.observe();

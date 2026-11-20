@@ -2,9 +2,9 @@ name: Draft Canvas
 on:
   push:
     branches: [main, 'feat/draft-canvas']
-    paths: ['android-canvas/**', '.github/workflows/canvas.yml']
+    paths: ['android-canvas/**', 'android-native/app/src/main/java/**', '.github/workflows/canvas.yml']
   pull_request:
-    paths: ['android-canvas/**', '.github/workflows/canvas.yml']
+    paths: ['android-canvas/**', 'android-native/app/src/main/java/**', '.github/workflows/canvas.yml']
   workflow_dispatch:
 permissions:
   contents: read
