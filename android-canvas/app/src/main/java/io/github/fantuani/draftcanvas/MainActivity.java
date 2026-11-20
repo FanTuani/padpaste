@@ -19,6 +19,7 @@ public final class MainActivity extends Activity {
     private DraftStore draftStore;
     private SharedPreferences toolSizes;
     private FanMenu menu;
+    private long menuQuestionId;
     private TextView zoom;
     private double shownScale = Double.NaN;
     private PenButtons penButtons;
@@ -88,7 +89,10 @@ public final class MainActivity extends Activity {
         root.addView(menu, new FrameLayout.LayoutParams(-1, -1));
         canvas.setOnClickListener(view -> {
             PointF anchor = canvas.selectionMenuAnchor();
-            menu.showSelection(anchor.x, anchor.y, !ink.selected.isEmpty(), ink.canPaste());
+            QuestionImage image = canvas.selectedQuestion();
+            menuQuestionId = image != null ? image.id : 0;
+            menu.showSelection(anchor.x, anchor.y, image != null || !ink.selected.isEmpty(),
+                    image != null ? ink.canPasteQuestions() : ink.canPaste());
         });
         penButtons = new PenButtons(new PenButtons.Listener() {
             @Override public void eraser(boolean held) {
@@ -107,6 +111,7 @@ public final class MainActivity extends Activity {
                 if (canvas.selectionArmed()) canvas.clearSelection();
                 PointF anchor = canvas.menuAnchor();
                 canvas.finishContactForMenu();
+                menuQuestionId = 0;
                 menu.showTools(anchor.x, anchor.y, canvas.color, !ink.strokes.isEmpty());
             }
             @Override public void beginSelection() {
@@ -135,6 +140,30 @@ public final class MainActivity extends Activity {
 
     private void menuCommand(int id) {
         Ink ink = canvas.ink;
+        long imageId = menuQuestionId;
+        menuQuestionId = 0;
+        if (imageId != 0) {
+            QuestionImage image = canvas.selectedQuestion();
+            if (image == null || image.id != imageId) return;
+            switch (id) {
+                case FanMenu.COPY:
+                    ink.copyQuestion(image);
+                    break;
+                case FanMenu.PASTE:
+                    canvas.pasteSelection();
+                    break;
+                case FanMenu.DELETE:
+                    ink.deleteQuestion(image);
+                    canvas.selectQuestion(null);
+                    canvas.refresh();
+                    break;
+                case FanMenu.CANCEL:
+                    canvas.selectQuestion(null);
+                    break;
+                default:
+            }
+            return;
+        }
         switch (id) {
             case FanMenu.SELECT:
                 canvas.armSelection();

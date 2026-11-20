@@ -43,6 +43,7 @@ public final class CanvasView extends View {
     private long offerImportId;
     QuestionAssets questionAssets;
     private long selectedQuestionId;
+    private float photoMenuX, photoMenuY;
     private PhotoGesture photoGesture;
 
     private static final class PhotoGesture {
@@ -113,6 +114,7 @@ public final class CanvasView extends View {
     }
 
     PointF selectionMenuAnchor() {
+        if (selectedQuestion() != null) return new PointF(photoMenuX, photoMenuY);
         if (selectionBox == null || selectionBox.contains(wx(lastX), wy(lastY))) {
             return new PointF(lastX, lastY);
         }
@@ -177,8 +179,15 @@ public final class CanvasView extends View {
     }
 
     void pasteSelection() {
-        if (!ink.canPaste()) return;
+        boolean fromPhoto = selectedQuestion() != null;
+        if (fromPhoto ? !ink.canPasteQuestions() : !ink.canPaste()) return;
         ink.paste(getWidth(), getHeight());
+        if (fromPhoto && ink.selected.size() == 1) {
+            selectQuestion(ink.question(ink.selected.iterator().next()));
+            refresh();
+            return;
+        }
+        if (fromPhoto) selectQuestion(null);
         double[] bounds = ink.selectionBounds();
         selectionBox = Lasso.rectangle(bounds[0], bounds[1], bounds[2], bounds[3]);
         refresh();
@@ -760,11 +769,18 @@ public final class CanvasView extends View {
                 }
                 if (action == MotionEvent.ACTION_UP) {
                     QuestionImage preview = photoGesture.preview;
+                    boolean imageTap = preview == null && !photoGesture.resize
+                            && e.getEventTime() - e.getDownTime() < ViewConfiguration.getLongPressTimeout()
+                            && questionAt(e.getX(), e.getY()) == photoGesture.original;
                     cancelPhotoGesture();
                     if (preview != null) {
                         ink.replaceQuestion(preview);
                         if (raster != null) raster.noteRevision(ink);
                         refreshOverlay();
+                    } else if (imageTap) {
+                        photoMenuX = e.getX();
+                        photoMenuY = e.getY();
+                        performClick();
                     }
                 }
                 return true;
@@ -810,7 +826,7 @@ public final class CanvasView extends View {
         }
         return true;
     }
-    @Override public boolean performClick(){return hasSelectionBox() && super.performClick();}
+    @Override public boolean performClick(){return (hasSelectionBox() || selectedQuestion() != null) && super.performClick();}
 
     private void handleFingerTap(MotionEvent event) {
         float x = event.getX(), y = event.getY();

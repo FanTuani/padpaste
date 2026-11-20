@@ -211,9 +211,19 @@ public final class CanvasTestRunner extends Instrumentation {
         QuestionImage image = new QuestionImage(document.nextId(), "test", -120, -80, 110, 80);
         document.questions.add(image);
         int finger = MotionEvent.TOOL_TYPE_FINGER;
+        int[] menuClicks = {0};
+        view.setOnClickListener(clicked -> menuClicks[0]++);
         event(view, finger, MotionEvent.ACTION_DOWN, 180, 210);
         event(view, finger, MotionEvent.ACTION_UP, 180, 210);
-        check(view.selectedQuestion() == image, "finger tap must select an image");
+        check(view.selectedQuestion() == image && menuClicks[0] == 0,
+                "first finger tap should only select the image");
+        event(view, finger, MotionEvent.ACTION_DOWN, 190, 215);
+        event(view, finger, MotionEvent.ACTION_UP, 190, 215);
+        check(menuClicks[0] == 1 && view.selectionMenuAnchor().x == 190 && view.selectionMenuAnchor().y == 215,
+                "next finger tap must open the selection menu at the contact");
+        event(view, finger, MotionEvent.ACTION_DOWN, 246, 256);
+        event(view, finger, MotionEvent.ACTION_UP, 246, 256);
+        check(menuClicks[0] == 1, "a tap on the resize handle must not open the menu");
 
         event(view, finger, MotionEvent.ACTION_DOWN, 180, 210);
         event(view, finger, MotionEvent.ACTION_MOVE, 220, 230);
@@ -227,6 +237,7 @@ public final class CanvasTestRunner extends Instrumentation {
         QuestionImage resized = view.selectedQuestion();
         check(resized.width == 165 && resized.height == 120 && resized.x == -80 && resized.y == -60,
                 "the corner handle must resize proportionally around the top left");
+        check(menuClicks[0] == 1, "image move and resize must not open the menu");
 
         event(view, finger, MotionEvent.ACTION_DOWN, 430, 410);
         event(view, finger, MotionEvent.ACTION_MOVE, 460, 410);
@@ -247,6 +258,17 @@ public final class CanvasTestRunner extends Instrumentation {
         event(view, finger, MotionEvent.ACTION_DOWN, 450, 400);
         event(view, finger, MotionEvent.ACTION_UP, 450, 400);
         check(view.selectedQuestion() == null, "tapping blank space must dismiss selection");
+
+        view.selectQuestion(resized);
+        document.copyQuestion(resized);
+        view.pasteSelection();
+        QuestionImage pasted = view.selectedQuestion();
+        check(pasted != null && pasted.id != resized.id && pasted.asset.equals(resized.asset)
+                        && document.questions.size() == 2 && document.strokes.size() == 2 && !view.hasSelectionBox(),
+                "pasting from the image menu must select only the copied image");
+        document.deleteQuestion(pasted);
+        check(document.questions.size() == 1 && document.strokes.size() == 2,
+                "deleting a selected image must preserve the ink");
     }
 
     private void checkPenPressureThreshold() {

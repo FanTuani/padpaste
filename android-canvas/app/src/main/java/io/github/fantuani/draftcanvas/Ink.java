@@ -161,6 +161,20 @@ public final class Ink {
         if(!copied.isEmpty()||!images.isEmpty()){clipboard=copied;questionClipboard=images;}
     }
     public boolean canPaste(){return !clipboard.isEmpty()||!questionClipboard.isEmpty();}
+    boolean canPasteQuestions() { return clipboard.isEmpty() && !questionClipboard.isEmpty(); }
+
+    void copyQuestion(QuestionImage image) {
+        clipboard = Collections.emptyList();
+        questionClipboard = Collections.singletonList(image);
+    }
+
+    void deleteQuestion(QuestionImage image) {
+        begin();
+        questions.remove(image);
+        selected.remove(image.id);
+        commit();
+    }
+
     public void paste(double screenWidth,double screenHeight){
         if(!canPaste())return;double l=Double.POSITIVE_INFINITY,t=l,r=-l,b=-l;
         for(Stroke s:clipboard){l=Math.min(l,s.left);r=Math.max(r,s.right);t=Math.min(t,s.top);b=Math.max(b,s.bottom);}
