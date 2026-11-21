@@ -45,6 +45,7 @@ public final class CanvasView extends View {
     private QuestionImage questionOffer;
     private Bitmap questionOfferBitmap;
     private Runnable acceptDraggedOffer;
+    private boolean offerAcceptedByDrag;
     private float offerAlpha, offerScale, offerLift;
     private long offerImportId;
     QuestionAssets questionAssets;
@@ -316,6 +317,7 @@ public final class CanvasView extends View {
         questionOfferBitmap = bitmap;
         offerImportId = importedId;
         acceptDraggedOffer = onDrag;
+        offerAcceptedByDrag = false;
         postInvalidateOnAnimation();
     }
 
@@ -356,7 +358,7 @@ public final class CanvasView extends View {
             c.drawRect(screenX(image.x), screenY(image.y), right, bottom, paint);
             drawResizeHandle(c, right, bottom);
         }
-        if ((acceptDraggedOffer != null || resizingQuestionOffer()) && offerAlpha > 0) {
+        if ((acceptDraggedOffer != null || offerAcceptedByDrag) && offerAlpha > 0) {
             updateOfferBounds(questionOffer);
             drawResizeHandle(c, offerBounds.right, offerBounds.bottom);
         }
@@ -413,7 +415,10 @@ public final class CanvasView extends View {
             questionOffer = gesture.preview;
             Runnable accept = acceptDraggedOffer;
             acceptDraggedOffer = null;
-            if (accept != null) accept.run();
+            if (accept != null) {
+                offerAcceptedByDrag = true;
+                accept.run();
+            }
         }
         postInvalidateOnAnimation();
     }

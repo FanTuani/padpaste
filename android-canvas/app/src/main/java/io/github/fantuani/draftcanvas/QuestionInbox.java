@@ -237,31 +237,37 @@ final class QuestionInbox implements QuestionConnection.Listener {
                 showCandidate();
                 toast("题图保存失败");
             } else {
-                place(asset, accepted);
+                place(asset, accepted, dragging);
             }
         });
     }
 
-    private void place(String asset, QuestionConnection.Candidate accepted) {
+    private void place(String asset, QuestionConnection.Candidate accepted, boolean dragged) {
         if (!canvas.canImportQuestion()) {
-            main.postDelayed(() -> place(asset, accepted), 60);
+            main.postDelayed(() -> place(asset, accepted, dragged), 60);
             return;
         }
         QuestionImage target = canvas.questionOfferPlacement();
         QuestionImage image = canvas.ink.importQuestion(asset, target);
         previousId = image.id;
         lastImport = SystemClock.elapsedRealtime();
-        canvas.showQuestionOffer(target, accepted.bitmap(), image.id, null);
+        if (!dragged) canvas.showQuestionOffer(target, accepted.bitmap(), image.id, null);
         canvas.refresh();
         draftStore.flush();
+        if (dragged) {
+            finishImport(image);
+            return;
+        }
         float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
         animate(175, false, t -> style(startAlpha + (1 - startAlpha) * t, startScale + (1 - startScale) * t,
-                startLift * (1 - t), startControls * (1 - t)), () -> {
-            clearOffer();
-            canvas.selectQuestion(image);
-            importing = false;
-            showCandidate();
-        });
+                startLift * (1 - t), startControls * (1 - t)), () -> finishImport(image));
+    }
+
+    private void finishImport(QuestionImage image) {
+        clearOffer();
+        canvas.selectQuestion(image);
+        importing = false;
+        showCandidate();
     }
 
     private void style(float alpha, float scale, float lift, float controls) {
