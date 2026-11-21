@@ -39,6 +39,7 @@ public final class CanvasView extends View {
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint photoPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final RectF photoBounds = new RectF();
+    private final DashPathEffect lassoDashes = new DashPathEffect(new float[]{dp(5), dp(4)}, 0);
     private final ArrayList<QuestionImage> visibleQuestions = new ArrayList<>();
     private final Runnable redrawQuestions = this::postInvalidateOnAnimation;
     private final RectF offerBounds = new RectF();
@@ -222,6 +223,11 @@ public final class CanvasView extends View {
         ink.undo();
         refresh();
     }
+    void questionAdded() {
+        if (raster != null) raster.noteRevision(ink);
+        refreshOverlay();
+    }
+
     private void refreshOverlay(){postInvalidateOnAnimation();changed.run();}
     public void refresh(){if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
@@ -281,8 +287,10 @@ public final class CanvasView extends View {
                 edge *= Math.max(1, selectionScale);
             }
             int projected = (int) Math.ceil(edge * ink.view.scale * 1.4);
-            int requestedEdge = zooming ? motionEdge : Math.max(1, Math.min(edgeLimit, projected));
-            Bitmap bitmap = questionAssets.visible(question.asset, requestedEdge, redrawQuestions);
+            int requestedEdge = Math.max(1, Math.min(edgeLimit, projected));
+            Bitmap bitmap = zooming
+                    ? questionAssets.duringZoom(question.asset, requestedEdge, motionEdge, redrawQuestions)
+                    : questionAssets.visible(question.asset, requestedEdge, redrawQuestions);
             if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
         }
         if (questionOffer != null) {
@@ -470,7 +478,7 @@ public final class CanvasView extends View {
         paint.setStyle(Paint.Style.STROKE);
         paint.setColor(0xff167b70);
         paint.setStrokeWidth(dp(1.2f));
-        paint.setPathEffect(new DashPathEffect(new float[]{dp(5), dp(4)}, 0));
+        paint.setPathEffect(lassoDashes);
         canvas.drawPath(lassoPath, paint);
         paint.setPathEffect(null);
         if (!marquee && !ink.selected.isEmpty()) {

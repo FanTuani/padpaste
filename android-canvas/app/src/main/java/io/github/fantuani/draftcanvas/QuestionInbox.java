@@ -5,12 +5,16 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -21,12 +25,18 @@ import android.view.animation.OvershootInterpolator;
 import android.view.animation.PathInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
-final class QuestionInbox implements QuestionConnection.Listener {
+import io.github.fantuani.padpaste.DuplexSync;
+import io.github.fantuani.padpaste.SyncService;
+
+final class QuestionInbox implements DuplexSync.Listener {
     static final int PICK_PAIRING = 630;
-    private static final String PAIRING = "pairing";
+    private static final String RECEIVE_ENABLED = "receive_enabled";
+    private record Candidate(byte[] data, Bitmap bitmap) {}
     private final Activity activity;
     private final CanvasView canvas;
     private final DraftStore draftStore;
@@ -34,14 +44,20 @@ final class QuestionInbox implements QuestionConnection.Listener {
     private final SharedPreferences preferences;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final TextView importButton, cancelButton, locateButton;
+    private final OfferRipple ripple;
+    private boolean locatePulsePending;
     private final RectF bounds = new RectF();
     private QuestionImage placement;
     private ValueAnimator motion;
     private float offerAlpha, offerScale, offerLift, controlsAlpha;
-    private QuestionConnection connection;
+    private final DuplexSync link;
+    private TextView connectionLabel;
+    private final BroadcastReceiver syncStatus = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { renderSyncStatus(); }
+    };
     private AlertDialog syncDialog;
-    private QuestionConnection.Candidate candidate;
-    private boolean active, connected, importing;
+    private Candidate candidate;
+    private boolean active, importing;
     private long previousId, lastImport;
 
     QuestionInbox(Activity activity, FrameLayout root, CanvasView canvas, DraftStore draftStore) {
@@ -49,13 +65,16 @@ final class QuestionInbox implements QuestionConnection.Listener {
         this.canvas = canvas;
         this.draftStore = draftStore;
         this.assets = QuestionAssets.get(activity);
-        this.preferences = activity.getSharedPreferences("question_link", Activity.MODE_PRIVATE);
+        preferences = activity.getSharedPreferences("question_link", Activity.MODE_PRIVATE);
+        link = DuplexSync.get(activity);
         canvas.questionAssets = assets;
 
         FrameLayout overlay = new FrameLayout(activity);
         overlay.setClipChildren(false);
         root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
         overlay.setElevation(dp(5));
+        ripple = new OfferRipple(activity);
+        overlay.addView(ripple, new FrameLayout.LayoutParams(-1, -1));
         importButton = button(overlay, "导入", Color.WHITE, 0xFF167B70, 74, this::accept);
         cancelButton = button(overlay, "取消", 0xFF40524E, 0xF5FFFEFA, 62, this::cancelOffer);
         locateButton = button(overlay, "查看题图", 0xFF167B70, 0xFFFFFEFA, 92, () -> {
@@ -69,42 +88,82 @@ final class QuestionInbox implements QuestionConnection.Listener {
 
     void start() {
         active = true;
-        if (connection != null) return;
-        String code = preferences.getString(PAIRING, "");
-        if (code.isEmpty()) return;
-        try {
-            connection = new QuestionConnection(activity, QuestionConnection.Pairing.parse(code), this);
-            connection.start();
-        } catch (Exception error) {
-            status(false);
-        }
+        updateSubscription();
+        SyncService.resumeMonitoring(activity);
     }
 
     void stop() {
         active = false;
-        if (connection != null) connection.stop();
-        connection = null;
-        status(false);
+        updateSubscription();
     }
 
-    @Override public void status(boolean online) {
-        connected = online;
-        if (syncDialog != null) syncDialog.setTitle(syncTitle());
+    private void updateSubscription() {
+        link.listen(active && preferences.getBoolean(RECEIVE_ENABLED, true) ? this : null);
     }
 
-    private String syncTitle() {
-        String state = preferences.contains(PAIRING) ? (connected ? "已连接 Mac" : "等待 Mac 连接") : "尚未配对";
-        return "同步 · " + state;
+    @Override public void status(boolean connected) { renderSyncStatus(); }
+
+    private void renderSyncStatus() {
+        if (connectionLabel == null) return;
+        String state = !link.paired() ? "尚未配对"
+                : link.connected() ? (link.duplex() ? "已连接 Mac" : "已连接 · 旧版 Mac")
+                : !preferences.getBoolean(RECEIVE_ENABLED, true) && !SyncService.enabled(activity) ? "已暂停"
+                : "等待 Mac 连接";
+        connectionLabel.setText(state);
+        connectionLabel.setTextColor(link.connected() ? 0xFF167B70 : 0xFF65706D);
     }
 
+    @android.annotation.SuppressLint({"UnspecifiedRegisterReceiverFlag", "UseSwitchCompatOrMaterialCode"})
     void settings() {
-        syncDialog = new AlertDialog.Builder(activity).setTitle(syncTitle())
-                .setItems(new String[]{"平板截图 → Mac 剪贴板", "Mac 剪贴板 → 草稿纸"}, (dialog, index) -> {
-                    if (index == 0) activity.startActivity(new Intent(activity, io.github.fantuani.padpaste.MainActivity.class));
-                    else pairingSettings();
-                }).create();
-        syncDialog.setOnDismissListener(dialog -> syncDialog = null);
+        if (syncDialog != null) return;
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24), dp(8), dp(24), dp(6));
+        connectionLabel = new TextView(activity);
+        connectionLabel.setTextSize(19);
+        connectionLabel.setTypeface(null, Typeface.BOLD);
+        content.addView(connectionLabel, new LinearLayout.LayoutParams(-1, dp(46)));
+        Switch receive = new Switch(activity);
+        receive.setText("Mac 剪贴板 → 草稿纸");
+        receive.setChecked(preferences.getBoolean(RECEIVE_ENABLED, true));
+        receive.setOnCheckedChangeListener((view, enabled) -> {
+            preferences.edit().putBoolean(RECEIVE_ENABLED, enabled).apply();
+            updateSubscription();
+            renderSyncStatus();
+        });
+        content.addView(receive, new LinearLayout.LayoutParams(-1, dp(54)));
+        Switch send = new Switch(activity);
+        send.setText("平板截图 → Mac 剪贴板");
+        send.setChecked(SyncService.enabled(activity));
+        send.setOnCheckedChangeListener((view, enabled) -> {
+            SyncService.setEnabled(activity, enabled);
+            if (enabled && !SyncService.filesAllowed(activity)) {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    activity.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            android.net.Uri.parse("package:" + activity.getPackageName())));
+                } else {
+                    activity.requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                            android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 103);
+                }
+            }
+            renderSyncStatus();
+        });
+        content.addView(send, new LinearLayout.LayoutParams(-1, dp(54)));
+        syncDialog = new AlertDialog.Builder(activity).setTitle("同步").setView(content)
+                .setPositiveButton("完成", null)
+                .setNegativeButton("配对 Mac", (dialog, index) -> pairingSettings())
+                .setNeutralButton("重新连接", null).create();
+        syncDialog.setOnDismissListener(dialog -> {
+            activity.unregisterReceiver(syncStatus);
+            syncDialog = null;
+            connectionLabel = null;
+        });
+        IntentFilter changes = new IntentFilter(SyncService.STATE_ACTION);
+        if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(syncStatus, changes, Context.RECEIVER_NOT_EXPORTED);
+        else activity.registerReceiver(syncStatus, changes);
         syncDialog.show();
+        syncDialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> link.reconnect());
+        renderSyncStatus();
     }
 
     private void pairingSettings() {
@@ -113,8 +172,8 @@ final class QuestionInbox implements QuestionConnection.Listener {
         input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle("Mac 剪贴板 → 草稿纸")
-                .setMessage("从 Mac 菜单栏的 PadPaste 复制配对码，也可以导入配对文件。")
+                .setTitle("配对 Mac")
+                .setMessage("从 Mac 的 PadPaste 菜单复制同步配对码，或导入配对文件。")
                 .setView(input)
                 .setPositiveButton("配对", null)
                 .setNeutralButton("导入文件", (d, which) -> activity.startActivityForResult(
@@ -129,11 +188,8 @@ final class QuestionInbox implements QuestionConnection.Listener {
 
     boolean pair(String code) {
         try {
-            QuestionConnection.Pairing.parse(code);
-            preferences.edit().putString(PAIRING, code.trim()).apply();
-            boolean restart = active;
-            stop();
-            if (restart) start();
+            link.pair(code);
+            SyncService.resumeMonitoring(activity);
             toast("配对已保存");
             return true;
         } catch (Exception error) {
@@ -142,9 +198,16 @@ final class QuestionInbox implements QuestionConnection.Listener {
         }
     }
 
-    @Override public void candidate(QuestionConnection.Candidate image) {
-        candidate = image;
-        showCandidate();
+    @Override public boolean image(byte[] data) {
+        try {
+            Bitmap bitmap = QuestionAssets.decode(data);
+            main.post(() -> {
+                if (!active || !preferences.getBoolean(RECEIVE_ENABLED, true)) return;
+                candidate = new Candidate(data, bitmap);
+                showCandidate();
+            });
+            return true;
+        } catch (java.io.IOException invalid) { return false; }
     }
 
     private void showCandidate() {
@@ -152,6 +215,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
         long now = SystemClock.elapsedRealtime();
         placement = canvas.ink.previewQuestion(candidate.bitmap().getWidth(), candidate.bitmap().getHeight(),
                 canvas.getWidth(), canvas.getHeight(), dp(36), now - lastImport < 120_000 ? previousId : 0);
+        locatePulsePending = true;
         canvas.showQuestionOffer(placement, candidate.bitmap(), 0, () -> accept(true));
         style(0, .92f, dp(12), 0);
         animate(230, true, t -> {
@@ -185,7 +249,12 @@ final class QuestionInbox implements QuestionConnection.Listener {
             position(cancelButton, cancelX, y);
         } else if (pending) {
             position(locateButton, bounds.centerX(), bounds.centerY());
+            if (locatePulsePending && locateButton.getWidth() > 0) {
+                ripple.pulse(locateButton.getX() + locateButton.getWidth() / 2f,
+                        locateButton.getY() + locateButton.getHeight() / 2f);
+            }
         }
+        if (inline || (pending && locateButton.getWidth() > 0)) locatePulsePending = false;
     }
 
     private void visibility(View view, boolean visible) {
@@ -216,7 +285,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
 
     private void accept(boolean dragging) {
         if (candidate == null || placement == null || importing) return;
-        QuestionConnection.Candidate accepted = candidate;
+        Candidate accepted = candidate;
         candidate = null;
         importing = true;
         if (dragging) {
@@ -242,7 +311,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
         });
     }
 
-    private void place(String asset, QuestionConnection.Candidate accepted, boolean dragged) {
+    private void place(String asset, Candidate accepted, boolean dragged) {
         if (!canvas.canImportQuestion()) {
             main.postDelayed(() -> place(asset, accepted, dragged), 60);
             return;
@@ -252,7 +321,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
         previousId = image.id;
         lastImport = SystemClock.elapsedRealtime();
         if (!dragged) canvas.showQuestionOffer(target, accepted.bitmap(), image.id, null);
-        canvas.refresh();
+        canvas.questionAdded();
         draftStore.flush();
         if (dragged) {
             finishImport(image);

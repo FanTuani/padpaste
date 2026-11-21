@@ -78,6 +78,10 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--preview") { show() }
         do {
             let link = try QuestionLink()
+            link.receiveScreenshot = { [weak nativeReceiver] name, data, completion in
+                guard let nativeReceiver else { completion(false); return }
+                nativeReceiver.receive(name: name, body: data, completion: completion)
+            }
             questions = link
             setupQuestionMenu()
             lastClipboardChange = NSPasteboard.general.changeCount
@@ -86,7 +90,6 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
             clipboardTimer = timer
             link.statusChanged = { [weak self] connected in
                 self?.questionConnected = connected
-                self?.lastClipboardChange = NSPasteboard.general.changeCount
                 self?.questionStatus?.title = connected ? "草稿纸已连接" : "等待草稿纸连接"
             }
             link.start()
@@ -108,8 +111,8 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         let clipboard = menu.addItem(withTitle: "监听剪贴板图片", action: #selector(toggleClipboard), keyEquivalent: "")
         clipboard.target = self
         clipboard.state = watchClipboard ? .on : .off
-        menu.addItem(withTitle: "复制草稿纸配对码", action: #selector(copyQuestionPairing), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "导出草稿纸配对文件…", action: #selector(saveQuestionPairing), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "复制同步配对码", action: #selector(copyQuestionPairing), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "导出同步配对文件…", action: #selector(saveQuestionPairing), keyEquivalent: "").target = self
         item.menu = menu
         statusItem = item
     }
@@ -124,13 +127,13 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
     @objc private func saveQuestionPairing() {
         guard let code = questions?.pairingCode(), !code.isEmpty else { return }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "PadPaste-题图配对.txt"
+        panel.nameFieldStringValue = "PadPaste-同步配对.txt"
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try Data(code.utf8).write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            showFeedback("已导出题图配对文件")
+            showFeedback("已导出同步配对文件")
         } catch {
             showFeedback("无法保存配对文件")
         }
@@ -144,12 +147,12 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
     }
 
     private func checkClipboard() {
+        guard watchClipboard, questionConnected, !sendingQuestion, let questions else { return }
         let board = NSPasteboard.general
         let change = board.changeCount
-        guard change != lastClipboardChange, !sendingQuestion else { return }
+        guard change != lastClipboardChange else { return }
         lastClipboardChange = change
-        guard watchClipboard, questionConnected, let questions,
-              let item = board.pasteboardItems?.first,
+        guard let item = board.pasteboardItems?.first,
               !item.types.contains(FastScreenshotReceiver.tabletOrigin) else { return }
         let formats: [NSPasteboard.PasteboardType] = [.png, .tiff, .init("public.jpeg"), .init("public.heic")]
         guard let type = formats.first(where: { item.types.contains($0) }),
@@ -159,7 +162,7 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
             let image = QuestionLink.prepare(data)
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard let image, self.watchClipboard else {
+                guard let image, self.watchClipboard, self.questionConnected else {
                     self.sendingQuestion = false
                     return
                 }

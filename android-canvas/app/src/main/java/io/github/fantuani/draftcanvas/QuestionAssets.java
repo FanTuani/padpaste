@@ -19,7 +19,7 @@ import java.util.concurrent.Executors;
 final class QuestionAssets {
     static final int MAX_BYTES = 6 * 1024 * 1024;
     private static final int CACHE_BYTES = 40 * 1024 * 1024;
-    private static final int MOTION_EDGE = 960;
+    private static final int MOTION_EDGE = 1200;
     private static QuestionAssets instance;
     private final File directory;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -87,6 +87,21 @@ final class QuestionAssets {
 
     static int motionEdgeLimit(int edgeLimit) {
         return Math.max(1, Math.min(MOTION_EDGE, edgeLimit));
+    }
+
+    Bitmap duringZoom(String asset, int displayEdge, int motionEdge, Runnable ready) {
+        Integer source = sourceEdges.get(asset);
+        if (source != null && source > 0) {
+            int ideal = sampleSize(source, displayEdge);
+            Bitmap detailed = bitmaps.get(new Sample(asset, ideal));
+            if (detailed != null) return detailed;
+            // Keep the closest sharper resident sample instead of switching to a soft proxy.
+            for (int finer = ideal / 2; finer >= 1; finer /= 2) {
+                Bitmap cached = bitmaps.get(new Sample(asset, finer));
+                if (cached != null && (long) cached.getAllocationByteCount() <= CACHE_BYTES / 2) return cached;
+            }
+        }
+        return visible(asset, Math.min(displayEdge, motionEdge), ready);
     }
 
     Bitmap visible(String asset, int edge, Runnable ready) {

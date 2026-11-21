@@ -133,7 +133,8 @@ public final class MainActivity extends Activity {
     }
 
     private void openSyncFromIntent(Intent intent) {
-        if (questions == null || !OPEN_SYNC.equals(intent.getAction())) return;
+        if (questions == null || (!OPEN_SYNC.equals(intent.getAction()) && !intent.getBooleanExtra("open_sync", false))) return;
+        intent.removeExtra("open_sync");
         intent.setAction(Intent.ACTION_MAIN);
         questions.settings();
     }

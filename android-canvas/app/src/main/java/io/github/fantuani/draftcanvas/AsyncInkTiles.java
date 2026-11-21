@@ -228,12 +228,31 @@ final class AsyncInkTiles {
         snapshot = null;
         fallbacks.clear();
         if (phase == null) return;
-        for (Tile tile : phase.tiles.values()) {
-            if (right >= tile.left && left <= tile.right && bottom >= tile.top && top <= tile.bottom) {
-                tile.dirty = sequence;
-                if (drawModel) tile.drawModelUntil = sequence;
+        int firstColumn = phase.column(left), lastColumn = phase.column(right);
+        int firstRow = phase.row(top), lastRow = phase.row(bottom);
+        if (firstColumn > Integer.MIN_VALUE) firstColumn--;
+        if (firstRow > Integer.MIN_VALUE) firstRow--;
+        long columns = (long) lastColumn - firstColumn + 1, rows = (long) lastRow - firstRow + 1;
+        if (columns <= phase.tiles.size() && rows <= phase.tiles.size() / columns) {
+            for (long row = firstRow; row <= lastRow; row++) {
+                for (long column = firstColumn; column <= lastColumn; column++) {
+                    Tile tile = phase.get((int) column, (int) row);
+                    if (tile != null && right >= tile.left && left <= tile.right
+                            && bottom >= tile.top && top <= tile.bottom) markDirty(tile, drawModel);
+                }
+            }
+        } else {
+            for (Tile tile : phase.tiles.values()) {
+                if (right >= tile.left && left <= tile.right && bottom >= tile.top && top <= tile.bottom) {
+                    markDirty(tile, drawModel);
+                }
             }
         }
+    }
+
+    private void markDirty(Tile tile, boolean drawModel) {
+        tile.dirty = sequence;
+        if (drawModel) tile.drawModelUntil = sequence;
     }
 
     void draw(Canvas canvas, Ink ink, Camera nextCamera, boolean navigating, boolean fillMissing,
