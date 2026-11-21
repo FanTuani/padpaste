@@ -187,22 +187,47 @@ public final class Ink {
         questionClipboard=images;commit();
     }
     public void deleteSelected(){if(selected.isEmpty())return;begin();strokes.removeIf(s->selected.contains(s.id));questions.removeIf(image->selected.contains(image.id));selected.clear();commit();}
+    private static final double[] EMPTY_SECTIONS = new double[0];
     double erasePadding;
-    public boolean erase(double ax,double ay,double bx,double by,double radius){
-        List<Stroke> next=null;int index=0;erasePadding=0;
-        double left=Math.min(ax,bx)-radius,top=Math.min(ay,by)-radius,right=Math.max(ax,bx)+radius,bottom=Math.max(ay,by)+radius;
-        for(Stroke s:strokes){
-            if(!s.intersects(left,top,right,bottom)){if(next!=null)next.add(s);index++;continue;}
-            double[] sections;
-            if(s.pathPoints().length==3){if(Eraser.distanceSquared(s.points[0],s.points[1],ax-s.x,ay-s.y,bx-s.x,by-s.y)>(radius+s.maxWidth/2)*(radius+s.maxWidth/2)){if(next!=null)next.add(s);index++;continue;}sections=new double[0];}
-            else sections=s.data().erase(s.sections,ax-s.x,ay-s.y,bx-s.x,by-s.y,radius,
-                    s.width / 2, s.variableWidth, s.maxWidth / 2);
-            if(sections==s.sections){if(next!=null)next.add(s);index++;continue;}
-            if(next==null){next=new ArrayList<>(strokes.size());next.addAll(strokes.subList(0,index));}
-            erasePadding=Math.max(erasePadding,s.maxWidth);selected.remove(s.id);if(sections.length>0)next.add(new Stroke(nextId(),s,sections));index++;
+    public boolean erase(double ax, double ay, double bx, double by, double radius) {
+        int count = strokes.size(), retained = 0;
+        boolean changed = false;
+        erasePadding = 0;
+        double left = Math.min(ax, bx) - radius, top = Math.min(ay, by) - radius;
+        double right = Math.max(ax, bx) + radius, bottom = Math.max(ay, by) + radius;
+        for (int i = 0; i < count; i++) {
+            Stroke stroke = strokes.get(i);
+            Stroke replacement = stroke;
+            if (stroke.intersects(left, top, right, bottom)) {
+                double[] sections = erasedSections(stroke, ax, ay, bx, by, radius);
+                if (sections != stroke.sections) {
+                    changed = true;
+                    erasePadding = Math.max(erasePadding, stroke.maxWidth);
+                    if (!selected.isEmpty()) selected.remove(stroke.id);
+                    replacement = sections.length == 0 ? null : new Stroke(nextId(), stroke, sections);
+                }
+            }
+            if (replacement != null) {
+                if (retained != i || replacement != stroke) strokes.set(retained, replacement);
+                retained++;
+            }
         }
-        if(next==null)return false;strokes.clear();strokes.addAll(next);revision++;return true;
+        if (retained < count) strokes.subList(retained, count).clear();
+        if (changed) revision++;
+        return changed;
     }
+
+    private double[] erasedSections(Stroke stroke, double ax, double ay, double bx, double by, double radius) {
+        if (stroke.pathPoints().length == 3) {
+            double reach = radius + stroke.maxWidth / 2;
+            return Eraser.distanceSquared(stroke.points[0], stroke.points[1], ax - stroke.x,
+                    ay - stroke.y, bx - stroke.x, by - stroke.y) <= reach * reach
+                    ? EMPTY_SECTIONS : stroke.sections;
+        }
+        return stroke.data().erase(stroke.sections, ax - stroke.x, ay - stroke.y, bx - stroke.x, by - stroke.y,
+                radius, stroke.width / 2, stroke.variableWidth, stroke.maxWidth / 2);
+    }
+
     boolean hasContent() { return !strokes.isEmpty() || !questions.isEmpty(); }
     public void clear(){if(!hasContent())return;begin();strokes.clear();questions.clear();selected.clear();commit();}
 
