@@ -306,6 +306,7 @@ public final class DuplexSync {
                     System.arraycopy(filename, 0, header, 2, filename.length);
                     link.sendParts(header, data);
                 } catch (Exception failure) {
+                    android.util.Log.w("PadPasteSync", "Screenshot send failed: " + failure.getClass().getSimpleName());
                     close(link.socket);
                     pending.complete(false);
                 }
@@ -341,16 +342,15 @@ public final class DuplexSync {
             byte[] nonce = new byte[12];
             RANDOM.nextBytes(nonce);
             Cipher cipher = cipher(Cipher.ENCRYPT_MODE, nonce, "tablet-frame");
-            output.writeInt(nonce.length + header.length + data.length + 16);
+            // Android's GCM provider can buffer update() output until doFinal().
+            // Finish encryption before writing a frame header to the live connection.
+            byte[] prefix = cipher.update(header);
+            byte[] sealed = cipher.doFinal(data);
+            int prefixSize = prefix == null ? 0 : prefix.length;
+            output.writeInt(nonce.length + prefixSize + sealed.length);
             output.write(nonce);
-            byte[] buffer = new byte[Math.min(65536, data.length) + header.length + 32];
-            output.write(buffer, 0, cipher.update(header, 0, header.length, buffer));
-            for (int offset = 0; offset < data.length;) {
-                int count = Math.min(65536, data.length - offset);
-                output.write(buffer, 0, cipher.update(data, offset, count, buffer));
-                offset += count;
-            }
-            output.write(buffer, 0, cipher.doFinal(buffer, 0));
+            if (prefixSize != 0) output.write(prefix);
+            output.write(sealed);
         }
 
         byte[] decrypt(byte[] payload, String purpose) throws Exception {
