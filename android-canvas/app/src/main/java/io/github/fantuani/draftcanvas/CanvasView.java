@@ -44,7 +44,7 @@ public final class CanvasView extends View {
     private final RectF offerBounds = new RectF();
     private QuestionImage questionOffer;
     private Bitmap questionOfferBitmap;
-    private java.util.function.Consumer<QuestionImage> acceptResizedOffer;
+    private Runnable acceptDraggedOffer;
     private float offerAlpha, offerScale, offerLift;
     private long offerImportId;
     QuestionAssets questionAssets;
@@ -281,7 +281,7 @@ public final class CanvasView extends View {
             if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
         }
         if (questionOffer != null) {
-            updateOfferBounds(resizingQuestionOffer() ? photoGesture.preview : questionOffer);
+            updateOfferBounds(questionOffer);
             photoPaint.setAlpha(Math.max(0, Math.min(255, Math.round(255 * offerAlpha))));
             canvas.drawBitmap(questionOfferBitmap, null, offerBounds, photoPaint);
             photoPaint.setAlpha(255);
@@ -310,19 +310,20 @@ public final class CanvasView extends View {
         offerBounds.offset(0, offerLift);
     }
 
-    void showQuestionOffer(QuestionImage image, Bitmap bitmap, long importedId,
-                           java.util.function.Consumer<QuestionImage> onResize) {
+    void showQuestionOffer(QuestionImage image, Bitmap bitmap, long importedId, Runnable onDrag) {
         if (photoGesture != null && photoGesture.offer) blockNavigation();
         questionOffer = image;
         questionOfferBitmap = bitmap;
         offerImportId = importedId;
-        acceptResizedOffer = onResize;
+        acceptDraggedOffer = onDrag;
         postInvalidateOnAnimation();
     }
 
     boolean resizingQuestionOffer() {
         return photoGesture != null && photoGesture.offer && photoGesture.preview != null;
     }
+
+    QuestionImage questionOfferPlacement() { return questionOffer; }
 
     void styleQuestionOffer(float alpha, float scale, float lift) {
         offerAlpha = alpha;
@@ -355,8 +356,8 @@ public final class CanvasView extends View {
             c.drawRect(screenX(image.x), screenY(image.y), right, bottom, paint);
             drawResizeHandle(c, right, bottom);
         }
-        if (acceptResizedOffer != null && offerAlpha > 0) {
-            updateOfferBounds(resizingQuestionOffer() ? photoGesture.preview : questionOffer);
+        if ((acceptDraggedOffer != null || resizingQuestionOffer()) && offerAlpha > 0) {
+            updateOfferBounds(questionOffer);
             drawResizeHandle(c, offerBounds.right, offerBounds.bottom);
         }
     }
@@ -371,7 +372,7 @@ public final class CanvasView extends View {
     }
 
     private boolean beginPhotoGesture(float x, float y) {
-        if (acceptResizedOffer != null && offerAlpha > 0) {
+        if (acceptDraggedOffer != null && offerAlpha > 0) {
             updateOfferBounds(questionOffer);
             if (hitsPhotoResizeHandle(x, y, offerBounds.right, offerBounds.bottom)) {
                 photoGesture = new PhotoGesture(questionOffer, x, y, true, true);
@@ -407,6 +408,12 @@ public final class CanvasView extends View {
             gesture.preview = original.scaled(original.x, original.y, factor);
         } else {
             gesture.preview = original.offset(original.id, dx, dy);
+        }
+        if (gesture.offer) {
+            questionOffer = gesture.preview;
+            Runnable accept = acceptDraggedOffer;
+            acceptDraggedOffer = null;
+            if (accept != null) accept.run();
         }
         postInvalidateOnAnimation();
     }
@@ -830,9 +837,7 @@ public final class CanvasView extends View {
                             && e.getEventTime() - e.getDownTime() < ViewConfiguration.getLongPressTimeout()
                             && questionAt(e.getX(), e.getY()) == photoGesture.original;
                     cancelPhotoGesture();
-                    if (offer) {
-                        if (preview != null && acceptResizedOffer != null) acceptResizedOffer.accept(preview);
-                    } else if (preview != null) {
+                    if (!offer && preview != null) {
                         ink.replaceQuestion(preview);
                         if (raster != null) raster.noteRevision(ink);
                         refreshOverlay();

@@ -152,7 +152,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
         long now = SystemClock.elapsedRealtime();
         placement = canvas.ink.previewQuestion(candidate.bitmap().getWidth(), candidate.bitmap().getHeight(),
                 canvas.getWidth(), canvas.getHeight(), dp(36), now - lastImport < 120_000 ? previousId : 0);
-        canvas.showQuestionOffer(placement, candidate.bitmap(), 0, this::accept);
+        canvas.showQuestionOffer(placement, candidate.bitmap(), 0, () -> accept(true));
         style(0, .92f, dp(12), 0);
         animate(230, true, t -> {
             float visible = Math.min(1, t);
@@ -211,21 +211,25 @@ final class QuestionInbox implements QuestionConnection.Listener {
     }
 
     private void accept() {
-        accept(placement);
+        accept(false);
     }
 
-    private void accept(QuestionImage target) {
-        if (candidate == null || target == null || importing) return;
+    private void accept(boolean dragging) {
+        if (candidate == null || placement == null || importing) return;
         QuestionConnection.Candidate accepted = candidate;
-        boolean resized = target != placement;
-        placement = target;
         candidate = null;
         importing = true;
-        canvas.showQuestionOffer(target, accepted.bitmap(), 0, null);
-        if (resized) style(offerAlpha, offerScale, offerLift, 0);
-        float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
-        animate(125, false, t -> style(startAlpha + (.83f - startAlpha) * t,
-                startScale + (1 - startScale) * t, startLift * (1 - t), startControls * (1 - t)), () -> {});
+        if (dragging) {
+            ValueAnimator previous = motion;
+            motion = null;
+            if (previous != null) previous.cancel();
+            style(1, 1, 0, 0);
+        } else {
+            canvas.showQuestionOffer(placement, accepted.bitmap(), 0, null);
+            float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
+            animate(125, false, t -> style(startAlpha + (.83f - startAlpha) * t,
+                    startScale + (1 - startScale) * t, startLift * (1 - t), startControls * (1 - t)), () -> {});
+        }
         assets.save(accepted.data(), accepted.bitmap(), asset -> {
             if (asset == null) {
                 importing = false;
@@ -233,16 +237,17 @@ final class QuestionInbox implements QuestionConnection.Listener {
                 showCandidate();
                 toast("题图保存失败");
             } else {
-                place(asset, target, accepted);
+                place(asset, accepted);
             }
         });
     }
 
-    private void place(String asset, QuestionImage target, QuestionConnection.Candidate accepted) {
+    private void place(String asset, QuestionConnection.Candidate accepted) {
         if (!canvas.canImportQuestion()) {
-            main.postDelayed(() -> place(asset, target, accepted), 60);
+            main.postDelayed(() -> place(asset, accepted), 60);
             return;
         }
+        QuestionImage target = canvas.questionOfferPlacement();
         QuestionImage image = canvas.ink.importQuestion(asset, target);
         previousId = image.id;
         lastImport = SystemClock.elapsedRealtime();

@@ -277,30 +277,35 @@ public final class CanvasTestRunner extends Instrumentation {
         new android.widget.FrameLayout(getTargetContext()).addView(view);
         view.layout(0, 0, 512, 512);
         QuestionImage offer = new QuestionImage(0, null, -120, -60, 180, 120);
-        QuestionImage[] accepted = {null};
+        int[] accepted = {0};
         Bitmap bitmap = Bitmap.createBitmap(18, 12, Bitmap.Config.ARGB_8888);
-        view.showQuestionOffer(offer, bitmap, 0, result -> accepted[0] = result);
+        view.showQuestionOffer(offer, bitmap, 0, () -> accepted[0]++);
         view.styleQuestionOffer(.64f, 1, 0);
         int finger = MotionEvent.TOOL_TYPE_FINGER;
         float grabX = 316 + Math.round(19 * view.getResources().getDisplayMetrics().density);
 
         event(view, finger, MotionEvent.ACTION_DOWN, grabX, 316);
         event(view, finger, MotionEvent.ACTION_UP, grabX, 316);
-        check(accepted[0] == null, "tapping the preview handle must not import");
+        check(accepted[0] == 0, "tapping the preview handle must not import");
 
         event(view, finger, MotionEvent.ACTION_DOWN, grabX, 316);
+        event(view, finger, MotionEvent.ACTION_MOVE, grabX + 45, 346);
+        check(view.resizingQuestionOffer() && accepted[0] == 1, "the first drag must accept the offer");
         event(view, finger, MotionEvent.ACTION_MOVE, grabX + 90, 376);
-        check(view.resizingQuestionOffer() && accepted[0] == null, "the offer must resize before import");
+        check(accepted[0] == 1 && view.questionOfferPlacement().width == 270,
+                "accepting must not interrupt the ongoing resize or repeat the import");
         event(view, finger, MotionEvent.ACTION_CANCEL, grabX + 90, 376);
-        check(!view.resizingQuestionOffer() && accepted[0] == null, "a canceled resize must not import");
+        check(!view.resizingQuestionOffer() && accepted[0] == 1 && view.questionOfferPlacement().width == 270,
+                "an interrupted drag must keep the accepted image at its last size");
 
+        view.showQuestionOffer(offer, bitmap, 0, () -> accepted[0]++);
         event(view, finger, MotionEvent.ACTION_DOWN, grabX, 316);
-        event(view, finger, MotionEvent.ACTION_MOVE, grabX + 90, 376);
+        event(view, finger, MotionEvent.ACTION_MOVE, grabX + 45, 346);
         event(view, finger, MotionEvent.ACTION_UP, grabX + 90, 376);
-        QuestionImage resized = accepted[0];
-        check(resized != null && resized.x == offer.x && resized.y == offer.y
+        QuestionImage resized = view.questionOfferPlacement();
+        check(accepted[0] == 2 && resized.x == offer.x && resized.y == offer.y
                         && resized.width == 270 && resized.height == 180,
-                "releasing the preview handle must accept the resized placement");
+                "releasing must keep the final placement without accepting again");
         view.showQuestionOffer(null, null, 0, null);
         bitmap.recycle();
     }
