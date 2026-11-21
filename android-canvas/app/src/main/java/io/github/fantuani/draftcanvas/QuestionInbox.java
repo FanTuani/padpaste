@@ -152,7 +152,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
         long now = SystemClock.elapsedRealtime();
         placement = canvas.ink.previewQuestion(candidate.bitmap().getWidth(), candidate.bitmap().getHeight(),
                 canvas.getWidth(), canvas.getHeight(), dp(36), now - lastImport < 120_000 ? previousId : 0);
-        canvas.showQuestionOffer(placement, candidate.bitmap(), 0);
+        canvas.showQuestionOffer(placement, candidate.bitmap(), 0, this::accept);
         style(0, .92f, dp(12), 0);
         animate(230, true, t -> {
             float visible = Math.min(1, t);
@@ -163,8 +163,9 @@ final class QuestionInbox implements QuestionConnection.Listener {
     private void positionControls() {
         if (placement == null && candidate != null && !importing) showCandidate();
         boolean inline = false;
-        boolean pending = placement != null && candidate != null && !importing;
-        if (placement != null && (pending || controlsAlpha > 0)) {
+        boolean resizing = canvas.resizingQuestionOffer();
+        boolean pending = placement != null && candidate != null && !importing && !resizing;
+        if (placement != null && !resizing && (pending || controlsAlpha > 0)) {
             canvas.questionBounds(placement, bounds);
             inline = bounds.centerX() >= 0 && bounds.centerX() <= canvas.getWidth()
                     && bounds.centerY() >= 0 && bounds.centerY() <= canvas.getHeight();
@@ -201,6 +202,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
 
     private void cancelOffer() {
         if (candidate == null || importing) return;
+        canvas.showQuestionOffer(placement, candidate.bitmap(), 0, null);
         candidate = null;
         float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
         animate(120, false, t -> style(startAlpha * (1 - t), startScale - .03f * t,
@@ -209,11 +211,18 @@ final class QuestionInbox implements QuestionConnection.Listener {
     }
 
     private void accept() {
-        if (candidate == null || placement == null || importing) return;
+        accept(placement);
+    }
+
+    private void accept(QuestionImage target) {
+        if (candidate == null || target == null || importing) return;
         QuestionConnection.Candidate accepted = candidate;
-        QuestionImage target = placement;
+        boolean resized = target != placement;
+        placement = target;
         candidate = null;
         importing = true;
+        canvas.showQuestionOffer(target, accepted.bitmap(), 0, null);
+        if (resized) style(offerAlpha, offerScale, offerLift, 0);
         float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
         animate(125, false, t -> style(startAlpha + (.83f - startAlpha) * t,
                 startScale + (1 - startScale) * t, startLift * (1 - t), startControls * (1 - t)), () -> {});
@@ -237,7 +246,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
         QuestionImage image = canvas.ink.importQuestion(asset, target);
         previousId = image.id;
         lastImport = SystemClock.elapsedRealtime();
-        canvas.showQuestionOffer(target, accepted.bitmap(), image.id);
+        canvas.showQuestionOffer(target, accepted.bitmap(), image.id, null);
         canvas.refresh();
         draftStore.flush();
         float startAlpha = offerAlpha, startScale = offerScale, startLift = offerLift, startControls = controlsAlpha;
@@ -266,7 +275,7 @@ final class QuestionInbox implements QuestionConnection.Listener {
 
     private void clearOffer() {
         placement = null;
-        canvas.showQuestionOffer(null, null, 0);
+        canvas.showQuestionOffer(null, null, 0, null);
     }
 
     private void animate(long duration, boolean spring, java.util.function.Consumer<Float> update, Runnable end) {

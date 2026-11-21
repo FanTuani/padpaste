@@ -20,6 +20,7 @@ public final class CanvasView extends View {
     static final float DEFAULT_PEN_SENSITIVITY = 1f;
     private static final float MAX_RAW_PEN_PRESSURE = 4095f;
     private static final float RESIZE_HANDLE_DP = 20f;
+    private static final float PHOTO_RESIZE_HIT_RADIUS_DP = 24f;
     public final Ink ink;
     public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
     private float penPressureThreshold;
@@ -43,6 +44,7 @@ public final class CanvasView extends View {
     private final RectF offerBounds = new RectF();
     private QuestionImage questionOffer;
     private Bitmap questionOfferBitmap;
+    private java.util.function.Consumer<QuestionImage> acceptResizedOffer;
     private float offerAlpha, offerScale, offerLift;
     private long offerImportId;
     QuestionAssets questionAssets;
@@ -53,14 +55,15 @@ public final class CanvasView extends View {
     private static final class PhotoGesture {
         final QuestionImage original;
         final float startX, startY;
-        final boolean resize;
+        final boolean resize, offer;
         QuestionImage preview;
 
-        PhotoGesture(QuestionImage image, float x, float y, boolean resize) {
+        PhotoGesture(QuestionImage image, float x, float y, boolean resize, boolean offer) {
             original = image;
             startX = x;
             startY = y;
             this.resize = resize;
+            this.offer = offer;
         }
     }
     private static final class SectionKey {
@@ -262,7 +265,8 @@ public final class CanvasView extends View {
             if (photoBounds.intersects(0, 0, getWidth(), getHeight())) visibleQuestions.add(question);
         }
         boolean zooming = (fingers && fingerCount == 2) || zoomAnimator != null;
-        boolean resizingPhoto = photoGesture != null && photoGesture.resize && photoGesture.preview != null;
+        boolean resizingPhoto = photoGesture != null && !photoGesture.offer
+                && photoGesture.resize && photoGesture.preview != null;
         boolean resizingSelection = dragging && resizeContact;
         int edgeLimit = QuestionAssets.edgeLimit(visibleQuestions.size());
         int motionEdge = QuestionAssets.motionEdgeLimit(edgeLimit);
@@ -277,14 +281,10 @@ public final class CanvasView extends View {
             if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
         }
         if (questionOffer != null) {
-            questionBounds(questionOffer, offerBounds);
-            canvas.save();
-            canvas.translate(0, offerLift);
-            canvas.scale(offerScale, offerScale, offerBounds.centerX(), offerBounds.centerY());
+            updateOfferBounds(resizingQuestionOffer() ? photoGesture.preview : questionOffer);
             photoPaint.setAlpha(Math.max(0, Math.min(255, Math.round(255 * offerAlpha))));
             canvas.drawBitmap(questionOfferBitmap, null, offerBounds, photoPaint);
             photoPaint.setAlpha(255);
-            canvas.restore();
         }
     }
 
@@ -303,11 +303,25 @@ public final class CanvasView extends View {
         bounds.set(screenX(image.x), screenY(image.y), screenX(image.right()), screenY(image.bottom()));
     }
 
-    void showQuestionOffer(QuestionImage image, Bitmap bitmap, long importedId) {
+    private void updateOfferBounds(QuestionImage image) {
+        questionBounds(image, offerBounds);
+        offerBounds.inset(offerBounds.width() * (1 - offerScale) / 2,
+                offerBounds.height() * (1 - offerScale) / 2);
+        offerBounds.offset(0, offerLift);
+    }
+
+    void showQuestionOffer(QuestionImage image, Bitmap bitmap, long importedId,
+                           java.util.function.Consumer<QuestionImage> onResize) {
+        if (photoGesture != null && photoGesture.offer) blockNavigation();
         questionOffer = image;
         questionOfferBitmap = bitmap;
         offerImportId = importedId;
+        acceptResizedOffer = onResize;
         postInvalidateOnAnimation();
+    }
+
+    boolean resizingQuestionOffer() {
+        return photoGesture != null && photoGesture.offer && photoGesture.preview != null;
     }
 
     void styleQuestionOffer(float alpha, float scale, float lift) {
@@ -331,15 +345,20 @@ public final class CanvasView extends View {
     }
 
     private void drawQuestionSelection(Canvas c) {
-        QuestionImage image = photoGesture != null && photoGesture.preview != null
+        QuestionImage image = photoGesture != null && !photoGesture.offer && photoGesture.preview != null
                 ? photoGesture.preview : selectedQuestion();
-        if (image == null) return;
-        float right = screenX(image.right()), bottom = screenY(image.bottom());
-        paint.setColor(0xFF167B70);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(1.2f));
-        c.drawRect(screenX(image.x), screenY(image.y), right, bottom, paint);
-        drawResizeHandle(c, right, bottom);
+        if (image != null) {
+            float right = screenX(image.right()), bottom = screenY(image.bottom());
+            paint.setColor(0xFF167B70);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1.2f));
+            c.drawRect(screenX(image.x), screenY(image.y), right, bottom, paint);
+            drawResizeHandle(c, right, bottom);
+        }
+        if (acceptResizedOffer != null && offerAlpha > 0) {
+            updateOfferBounds(resizingQuestionOffer() ? photoGesture.preview : questionOffer);
+            drawResizeHandle(c, offerBounds.right, offerBounds.bottom);
+        }
     }
 
     private QuestionImage questionAt(float x, float y) {
@@ -352,15 +371,27 @@ public final class CanvasView extends View {
     }
 
     private boolean beginPhotoGesture(float x, float y) {
+        if (acceptResizedOffer != null && offerAlpha > 0) {
+            updateOfferBounds(questionOffer);
+            if (hitsPhotoResizeHandle(x, y, offerBounds.right, offerBounds.bottom)) {
+                photoGesture = new PhotoGesture(questionOffer, x, y, true, true);
+                lastTapTime = -1;
+                fingerTap = false;
+                return true;
+            }
+        }
         QuestionImage image = selectedQuestion();
         if (image == null) return false;
-        float hit = dp(RESIZE_HANDLE_DP / 2 + 4);
-        boolean resize = Math.abs(x - screenX(image.right())) <= hit && Math.abs(y - screenY(image.bottom())) <= hit;
+        boolean resize = hitsPhotoResizeHandle(x, y, screenX(image.right()), screenY(image.bottom()));
         if (!resize && questionAt(x, y) != image) return false;
-        photoGesture = new PhotoGesture(image, x, y, resize);
+        photoGesture = new PhotoGesture(image, x, y, resize, false);
         lastTapTime = -1;
         fingerTap = false;
         return true;
+    }
+
+    private boolean hitsPhotoResizeHandle(float x, float y, float right, float bottom) {
+        return Math.hypot(x - right, y - bottom) <= dp(PHOTO_RESIZE_HIT_RADIUS_DP);
     }
 
     private void updatePhotoGesture(float x, float y) {
@@ -794,11 +825,14 @@ public final class CanvasView extends View {
                 }
                 if (action == MotionEvent.ACTION_UP) {
                     QuestionImage preview = photoGesture.preview;
+                    boolean offer = photoGesture.offer;
                     boolean imageTap = preview == null && !photoGesture.resize
                             && e.getEventTime() - e.getDownTime() < ViewConfiguration.getLongPressTimeout()
                             && questionAt(e.getX(), e.getY()) == photoGesture.original;
                     cancelPhotoGesture();
-                    if (preview != null) {
+                    if (offer) {
+                        if (preview != null && acceptResizedOffer != null) acceptResizedOffer.accept(preview);
+                    } else if (preview != null) {
                         ink.replaceQuestion(preview);
                         if (raster != null) raster.noteRevision(ink);
                         refreshOverlay();
