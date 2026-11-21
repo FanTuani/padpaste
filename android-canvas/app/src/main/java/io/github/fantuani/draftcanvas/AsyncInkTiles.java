@@ -19,6 +19,8 @@ final class AsyncInkTiles {
     private final Runnable invalidate;
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint overlayPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final PorterDuffXfermode clearInk = new PorterDuffXfermode(PorterDuff.Mode.CLEAR);
+    private boolean isolatedInk;
     private final RectF destination = new RectF();
     private final Map<Ink.Stroke, Path> paths = new LinkedHashMap<Ink.Stroke, Path>(1024, .75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<Ink.Stroke, Path> entry) {
@@ -256,9 +258,10 @@ final class AsyncInkTiles {
     }
 
     void draw(Canvas canvas, Ink ink, Camera nextCamera, boolean navigating, boolean fillMissing,
-              InkTiles.Drawer drawModel) {
+              boolean isolatedInk, InkTiles.Drawer drawModel) {
         document = ink;
         camera = nextCamera;
+        this.isolatedInk = isolatedInk;
         if (seenRevision < 0) seenRevision = ink.revision;
         if (ink.strokes.isEmpty()) {
             if (phase != null || !fallbacks.isEmpty()) epoch++;
@@ -287,7 +290,7 @@ final class AsyncInkTiles {
             phase.removeOutside(nearby);
         }
         if (visibleReady()) fallbacks.clear();
-        if (!ops.isEmpty()) updatePaperShader();
+        if (!isolatedInk && !ops.isEmpty()) updatePaperShader();
 
         for (int row = phase.visible.top; row <= phase.visible.bottom; row++) {
             for (int col = phase.visible.left; col <= phase.visible.right; col++) {
@@ -437,13 +440,15 @@ final class AsyncInkTiles {
         for (Op op : ops) {
             if (op.seq <= tile.sequence || !op.intersects(tile)) continue;
             if (op.stroke == null) {
-                overlayPaint.setShader(camera.scale >= CanvasView.MIN_GRID_SCALE ? paper : null);
+                overlayPaint.setShader(!isolatedInk && camera.scale >= CanvasView.MIN_GRID_SCALE ? paper : null);
+                if (isolatedInk) overlayPaint.setXfermode(clearInk);
                 overlayPaint.setColor(CanvasView.PAPER_COLOR);
                 overlayPaint.setStyle(Paint.Style.STROKE);
                 overlayPaint.setStrokeCap(Paint.Cap.ROUND);
                 overlayPaint.setStrokeWidth((float) (op.radius * 2));
                 canvas.drawLine((float) (op.ax - camera.x), (float) (op.ay - camera.y),
                         (float) (op.bx - camera.x), (float) (op.by - camera.y), overlayPaint);
+                if (isolatedInk) overlayPaint.setXfermode(null);
             } else {
                 Ink.Stroke stroke = op.stroke;
                 if (op.path == null) op.path = strokePath(stroke);

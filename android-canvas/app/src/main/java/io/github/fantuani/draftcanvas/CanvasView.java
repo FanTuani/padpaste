@@ -39,6 +39,11 @@ public final class CanvasView extends View {
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint photoPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final RectF photoBounds = new RectF();
+    private final QuestionInk questionInk = new QuestionInk();
+    private final RectF compositedInkBounds = new RectF();
+    private final RectF liveInkBounds = new RectF();
+    private final InkBounds cachedInkBounds = new InkBounds(), movedInkBounds = new InkBounds();
+    private long cachedInkRevision = -1;
     private final DashPathEffect lassoDashes = new DashPathEffect(new float[]{dp(5), dp(4)}, 0);
     private final ArrayList<QuestionImage> visibleQuestions = new ArrayList<>();
     private final Runnable redrawQuestions = this::postInvalidateOnAnimation;
@@ -68,6 +73,24 @@ public final class CanvasView extends View {
             this.offer = offer;
         }
     }
+    private static final class InkBounds {
+        double left, top, right, bottom;
+
+        void reset() {
+            left = top = Double.POSITIVE_INFINITY;
+            right = bottom = Double.NEGATIVE_INFINITY;
+        }
+
+        void include(Ink.Stroke stroke, double x, double y, double scale) {
+            left = Math.min(left, x + (stroke.left - stroke.x) * scale);
+            top = Math.min(top, y + (stroke.top - stroke.y) * scale);
+            right = Math.max(right, x + (stroke.right - stroke.x) * scale);
+            bottom = Math.max(bottom, y + (stroke.bottom - stroke.y) * scale);
+        }
+
+        boolean hasInk() { return left <= right; }
+    }
+
     private static final class SectionKey {
         final double a,b;SectionKey(double a,double b){this.a=a;this.b=b;}
         @Override public boolean equals(Object other){return other instanceof SectionKey&&((SectionKey)other).a==a&&((SectionKey)other).b==b;}
@@ -232,12 +255,31 @@ public final class CanvasView extends View {
     public void refresh(){if(tiles!=null)tiles.invalidateAll();if(raster!=null)raster.modelChanged(ink);postInvalidateOnAnimation();changed.run();}
     @Override protected void onDraw(android.graphics.Canvas c){
         super.onDraw(c);drawGrid(c);
-        drawQuestions(c);
+        drawQuestions(c, !ink.strokes.isEmpty() || !liveStroke.isEmpty());
+        boolean invertInk = !questionInk.isEmpty() && findInvertedInkBounds();
+        int inkLayer = invertInk ? c.saveLayer(compositedInkBounds, null) : -1;
+        drawCanvasInk(c, invertInk);
+        if (invertInk) {
+            questionInk.draw(c, compositedInkBounds);
+            c.restoreToCount(inkLayer);
+        }
+        questionInk.clear();
+        drawLasso(c);
+        drawQuestionSelection(c);
+        if(displayMode()==ERASE&&cursorKnown&&(nearPen||penId!=-1||temporaryEraser)){
+            float radius=cursorRadius>0?cursorRadius:eraserSize/2;
+            paint.setStyle(Paint.Style.FILL);paint.setColor(0x10167B70);c.drawCircle(lastX,lastY,radius,paint);
+            paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2.5f));paint.setColor(0xE6FFFFFF);c.drawCircle(lastX,lastY,radius,paint);
+            paint.setStrokeWidth(dp(1));paint.setColor(0xD9167B70);c.drawCircle(lastX,lastY,radius,paint);
+        }
+    }
+
+    private void drawCanvasInk(Canvas c, boolean isolated) {
         if (Build.VERSION.SDK_INT >= 29 && c.isHardwareAccelerated() && zoomPreview != null) {
             raster.drawZoom(c, cameraAt(ink.view.x, ink.view.y, ink.view.scale), () -> zoomPreview.draw(c));
         } else if(c.isHardwareAccelerated()&&(isAttachedToWindow()||testAsync)&&!dragging){
             if(raster==null)raster=new AsyncInkTiles(this::postInvalidateOnAnimation);
-            raster.draw(c,ink,cameraAt(ink.view.x,ink.view.y,ink.view.scale), fingers || zoomAnimator != null, zoomSettling, this::drawInk);
+            raster.draw(c,ink,cameraAt(ink.view.x,ink.view.y,ink.view.scale), fingers || zoomAnimator != null, zoomSettling, isolated, this::drawInk);
             if (zoomAnimator == null && raster.ready()) zoomSettling = false;
         }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&!dragging&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
@@ -250,17 +292,41 @@ public final class CanvasView extends View {
             liveStroke.draw(c, paint, strokeWidth, ink.view.scale, strokeSensitivity > 0);
             c.restore();
         }
-        drawLasso(c);
-        drawQuestionSelection(c);
-        if(displayMode()==ERASE&&cursorKnown&&(nearPen||penId!=-1||temporaryEraser)){
-            float radius=cursorRadius>0?cursorRadius:eraserSize/2;
-            paint.setStyle(Paint.Style.FILL);paint.setColor(0x10167B70);c.drawCircle(lastX,lastY,radius,paint);
-            paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2.5f));paint.setColor(0xE6FFFFFF);c.drawCircle(lastX,lastY,radius,paint);
-            paint.setStrokeWidth(dp(1));paint.setColor(0xD9167B70);c.drawCircle(lastX,lastY,radius,paint);
-        }
     }
 
-    private void drawQuestions(Canvas canvas) {
+    private boolean findInvertedInkBounds() {
+        InkBounds bounds = dragging ? movedInkBounds : cachedInkBounds;
+        if (dragging || cachedInkRevision != ink.revision) {
+            bounds.reset();
+            for (Ink.Stroke stroke : ink.strokes) {
+                if (dragging && ink.selected.contains(stroke.id)) {
+                    double x = selectionBox.left + (stroke.x - selectionBox.left) * selectionScale + dragX;
+                    double y = selectionBox.top + (stroke.y - selectionBox.top) * selectionScale + dragY;
+                    bounds.include(stroke, x, y, selectionScale);
+                } else {
+                    bounds.include(stroke, stroke.x, stroke.y, 1);
+                }
+            }
+            if (!dragging) cachedInkRevision = ink.revision;
+        }
+        compositedInkBounds.setEmpty();
+        if (bounds.hasInk()) {
+            compositedInkBounds.set(screenX(bounds.left), screenY(bounds.top),
+                    screenX(bounds.right), screenY(bounds.bottom));
+        }
+        if (!liveStroke.isEmpty()) {
+            liveStroke.bounds(liveInkBounds, strokeWidth);
+            compositedInkBounds.union(screenX(strokeX + liveInkBounds.left), screenY(strokeY + liveInkBounds.top),
+                    screenX(strokeX + liveInkBounds.right), screenY(strokeY + liveInkBounds.bottom));
+        }
+        if (compositedInkBounds.isEmpty()) return false;
+        // Include the antialiased fringe, but don't allocate beyond the visible ink.
+        compositedInkBounds.inset(-2, -2);
+        return compositedInkBounds.intersect(0, 0, getWidth(), getHeight())
+                && questionInk.intersects(compositedInkBounds);
+    }
+
+    private void drawQuestions(Canvas canvas, boolean collectForInk) {
         if (questionAssets == null) return;
         visibleQuestions.clear();
         for (QuestionImage question : ink.questions) {
@@ -291,12 +357,16 @@ public final class CanvasView extends View {
             Bitmap bitmap = zooming
                     ? questionAssets.duringZoom(question.asset, requestedEdge, motionEdge, redrawQuestions)
                     : questionAssets.visible(question.asset, requestedEdge, redrawQuestions);
-            if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
+            if (bitmap != null) {
+                canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
+                if (collectForInk) questionInk.add(bitmap, photoBounds, 255);
+            }
         }
         if (questionOffer != null) {
             updateOfferBounds(questionOffer);
             photoPaint.setAlpha(Math.max(0, Math.min(255, Math.round(255 * offerAlpha))));
             canvas.drawBitmap(questionOfferBitmap, null, offerBounds, photoPaint);
+            if (collectForInk && offerImportId != 0) questionInk.add(questionOfferBitmap, offerBounds, photoPaint.getAlpha());
             photoPaint.setAlpha(255);
         }
     }

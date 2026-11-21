@@ -310,6 +310,62 @@ public final class CanvasTestRunner extends Instrumentation {
         bitmap.recycle();
     }
 
+    private void checkInvertedQuestionInk() {
+        Ink document = new Ink();
+        CanvasView view = new CanvasView(getTargetContext(), document);
+        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        view.layout(0, 0, 512, 320);
+        view.questionAssets = QuestionAssets.get(getTargetContext());
+        view.testAsync = true;
+        view.width = 12;
+        view.penSensitivity = 0;
+        view.color = 0xFF864321;
+        Bitmap photo = Bitmap.createBitmap(256, 80, Bitmap.Config.ARGB_8888);
+        Canvas image = new Canvas(photo);
+        android.graphics.Paint fill = new android.graphics.Paint();
+        fill.setColor(0xFF102030);
+        image.drawRect(0, 0, 128, 80, fill);
+        fill.setColor(0xFFE0A060);
+        image.drawRect(128, 0, 224, 80, fill);
+        QuestionImage placement = new QuestionImage(1, "test", -128, -20, 256, 80);
+        view.showQuestionOffer(placement, photo, placement.id, null);
+        view.styleQuestionOffer(1, 1, 0);
+        try {
+            snapshot(view).recycle();
+            pen(view, MotionEvent.ACTION_DOWN, 55, 180);
+            pen(view, MotionEvent.ACTION_MOVE, 430, 180);
+            checkInvertedPixels(view, "live ink");
+            pen(view, MotionEvent.ACTION_UP, 430, 180);
+            checkInvertedPixels(view, "committed ink");
+
+            document.begin();
+            view.eraseWorld(-161, 20, -161, 20, 10);
+            view.eraseWorld(-70, 20, -70, 20, 10);
+            document.commit();
+            Bitmap erased = snapshot(view);
+            check(erased.getPixel(186, 180) == 0xFF102030, "erasing inverted ink must uncover the photo");
+            check(erased.getPixel(95, 180) != view.color, "erasing next to a photo must uncover the paper");
+            check(erased.getPixel(299, 180) == 0xFF1F5F9F, "untouched inverted ink must remain");
+            erased.recycle();
+        } finally {
+            view.closeRaster();
+            photo.recycle();
+        }
+    }
+
+    private void checkInvertedPixels(CanvasView view, String stage) {
+        Bitmap rendered = snapshot(view);
+        try {
+            check(rendered.getPixel(95, 180) == view.color, stage + " keeps the pen color outside the image");
+            check(rendered.getPixel(186, 180) == 0xFFEFDFCF, stage + " inverts dark image pixels");
+            check(rendered.getPixel(299, 180) == 0xFF1F5F9F, stage + " inverts light image pixels");
+            check(rendered.getPixel(371, 180) == view.color, stage + " keeps the pen color over transparency");
+            check(rendered.getPixel(186, 166) == 0xFF102030, stage + " leaves untouched image pixels alone");
+        } finally {
+            rendered.recycle();
+        }
+    }
+
     private void checkPenPressureThreshold() {
         Ink ink = new Ink();
         CanvasView view = new CanvasView(getTargetContext(), ink);
@@ -478,6 +534,7 @@ public final class CanvasTestRunner extends Instrumentation {
             checkVariableWidth();
             checkQuestionTouch();
             checkPendingQuestionResize();
+            checkInvertedQuestionInk();
             checkPenPressureThreshold();
             pen(v,MotionEvent.ACTION_DOWN,440,520);pen(v,MotionEvent.ACTION_MOVE,520,550);pen(v,MotionEvent.ACTION_UP,600,580);check(d.strokes.size()==1,"stylus stroke missing");
             pen(v,MotionEvent.ACTION_DOWN,700,400);pen(v,MotionEvent.ACTION_MOVE,800,500);pen(v,MotionEvent.ACTION_CANCEL,800,500);check(d.strokes.size()==1,"canceled pen was retained");

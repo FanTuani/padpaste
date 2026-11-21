@@ -110,12 +110,12 @@ final class AsyncRasterCheck {
             waitForInk(runner, cache, canvas, image, ink, middle, 334, blue);
             runner.runOnMainSync(() -> {
                 image.eraseColor(Color.WHITE);
-                cache.draw(canvas, ink, last, true, false, (c, l, t, r, b) -> {});
+                cache.draw(canvas, ink, last, true, false, false, (c, l, t, r, b) -> {});
                 check(image.getPixel(168, 256) == red, "rapid zoom lost previously visible ink");
                 check(image.getPixel(285, 256) == blue, "rapid zoom lost newly revealed ink");
 
                 image.eraseColor(Color.WHITE);
-                cache.draw(canvas, ink, last, false, false, (c, l, t, r, b) -> {});
+                cache.draw(canvas, ink, last, false, false, false, (c, l, t, r, b) -> {});
                 check(image.getPixel(168, 256) == red && image.getPixel(285, 256) == blue,
                         "pinch release must preserve both regions before fresh tiles arrive");
             });
@@ -131,7 +131,7 @@ final class AsyncRasterCheck {
         do {
             runner.runOnMainSync(() -> {
                 image.eraseColor(Color.WHITE);
-                cache.draw(canvas, ink, camera, true, false, (c, l, t, r, b) -> {});
+                cache.draw(canvas, ink, camera, true, false, false, (c, l, t, r, b) -> {});
             });
             if (image.getPixel(x, 256) == color) return;
             Thread.sleep(8);
@@ -165,7 +165,7 @@ final class AsyncRasterCheck {
             runner.runOnMainSync(() -> {
                 cache.endZoom(true);
                 image.eraseColor(Color.WHITE);
-                cache.draw(canvas, ink, target, false, false, (c, l, t, r, b) -> {});
+                cache.draw(canvas, ink, target, false, false, false, (c, l, t, r, b) -> {});
             });
             check(image.getPixel(256, 256) == expectedInk, "final view must reuse the prefetched tile");
         } finally {

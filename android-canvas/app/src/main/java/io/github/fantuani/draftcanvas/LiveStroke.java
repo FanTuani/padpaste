@@ -3,6 +3,7 @@ package io.github.fantuani.draftcanvas;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RectF;
 import java.util.Arrays;
 
 /** Keeps the settled quadratic segments while the last sample follows the pen tip. */
@@ -14,6 +15,7 @@ final class LiveStroke {
     private float anchorX, anchorY;
     private float anchorWidth, prefixX, prefixY, prefixWidth;
     private boolean previewDirty;
+    private float left, top, right, bottom, maxMultiplier;
 
     boolean isEmpty() { return size == 0; }
 
@@ -25,6 +27,9 @@ final class LiveStroke {
 
     boolean add(float x, float y, double scale, float width, float multiplier, boolean variableWidth) {
         if (isEmpty()) {
+            left = right = x;
+            top = bottom = y;
+            maxMultiplier = multiplier;
             if (variableWidth) prefix.addCircle(x, y, width * multiplier / 2, Path.Direction.CCW);
             else prefix.moveTo(x, y);
             anchorX = prefixX = x;
@@ -35,6 +40,7 @@ final class LiveStroke {
             float lastWidth = points[size - 1];
             if (Math.hypot(x - lastX, y - lastY) * scale < .25) {
                 if (!variableWidth || size != 3 || multiplier <= lastWidth) return false;
+                maxMultiplier = multiplier;
                 anchorWidth = prefixWidth = points[2] = multiplier;
                 prefix.rewind();
                 prefix.addCircle(lastX, lastY, width * multiplier / 2, Path.Direction.CCW);
@@ -56,6 +62,11 @@ final class LiveStroke {
                 anchorWidth = lastWidth;
             }
         }
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+        maxMultiplier = Math.max(maxMultiplier, multiplier);
         if (size == points.length) points = Arrays.copyOf(points, size * 2);
         points[size++] = x;
         points[size++] = y;
@@ -93,6 +104,11 @@ final class LiveStroke {
 
     private static float pressureStep(float width, double scale) {
         return Math.max((float) (1.5 / scale), width * .25f);
+    }
+
+    void bounds(RectF out, float width) {
+        float radius = width * maxMultiplier / 2;
+        out.set(left - radius, top - radius, right + radius, bottom + radius);
     }
 
     float[] copyPoints() { return Arrays.copyOf(points, size); }
