@@ -273,11 +273,15 @@ public final class CanvasView extends View {
         int motionEdge = QuestionAssets.motionEdgeLimit(edgeLimit);
         for (QuestionImage question : visibleQuestions) {
             questionDisplayBounds(question);
-            // Translation keeps the same sample. Only images changing size need the motion limit.
-            boolean useMotionSample = zooming || (resizingPhoto && question.id == photoGesture.original.id)
-                    || (resizingSelection && ink.selected.contains(question.id));
-            int projected = (int) Math.ceil(Math.max(question.width, question.height) * ink.view.scale * 1.4);
-            int requestedEdge = useMotionSample ? motionEdge : Math.max(1, Math.min(edgeLimit, projected));
+            double edge = Math.max(question.width, question.height);
+            // Keep the starting detail when shrinking and refine in the background when growing.
+            if (resizingPhoto && question.id == photoGesture.original.id) {
+                edge = Math.max(edge, Math.max(photoGesture.original.width, photoGesture.original.height));
+            } else if (resizingSelection && ink.selected.contains(question.id)) {
+                edge *= Math.max(1, selectionScale);
+            }
+            int projected = (int) Math.ceil(edge * ink.view.scale * 1.4);
+            int requestedEdge = zooming ? motionEdge : Math.max(1, Math.min(edgeLimit, projected));
             Bitmap bitmap = questionAssets.visible(question.asset, requestedEdge, redrawQuestions);
             if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
         }
