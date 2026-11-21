@@ -4,7 +4,6 @@ import java.util.Arrays;
 
 /** Immutable centerline BVH with visible intervals in segment-index coordinates. */
 final class StrokeData {
-    private static final ThreadLocal<Sweep> SWEEP = ThreadLocal.withInitial(Sweep::new);
     final float[] points;final Node root;final int segments;
     StrokeData(float[] points){this.points=points;segments=points.length/3-1;root=build(0,segments);}
     static final class Node {
@@ -22,17 +21,11 @@ final class StrokeData {
     }
     double[] erase(double[] previous,double ax,double ay,double bx,double by,double radius,
                    float baseRadius,boolean variableWidth,float maxRadius){
-        Sweep sweep = SWEEP.get();
-        Intervals hits = sweep.hits;
-        hits.size = 0;
-        Capsule capsule = sweep.capsule;
-        capsule.set(ax, ay, bx, by, radius + maxRadius);
-        query(root, previous, capsule, hits, radius, variableWidth ? baseRadius : 0);
-        if (hits.size == 0) return previous;
-        double[] visible=previous==null?new double[]{0,segments}:previous;
-        Intervals result = sweep.result;
-        result.size = 0;
-        boolean changed=false;int h=0;
+        Intervals hits=new Intervals();
+        Capsule capsule=new Capsule(ax,ay,bx,by,radius+maxRadius);
+        query(root,previous,capsule,hits,radius,variableWidth?baseRadius:0);
+        if(hits.size==0)return previous;
+        double[] visible=previous==null?new double[]{0,segments}:previous;Intervals result=new Intervals();boolean changed=false;int h=0;
         for(int i=0;i<visible.length;i+=2){double cursor=visible[i],end=visible[i+1];while(h<hits.size&&hits.values[h+1]<=cursor)h+=2;int j=h;
             while(j<hits.size&&hits.values[j]<end){double a=Math.max(cursor,hits.values[j]),b=Math.min(end,hits.values[j+1]);if(b>a+1e-9){changed=true;if(a>cursor+1e-9)result.add(cursor,a);cursor=Math.max(cursor,b);}if(cursor>=end-1e-9)break;j+=2;}
             if(cursor<end-1e-9)result.add(cursor,end);
@@ -40,14 +33,6 @@ final class StrokeData {
     }
     private void query(Node node,double[] ranges,Capsule c,Intervals hits,double radius,float baseRadius){
         if(node.right<c.left||node.left>c.right||node.bottom<c.top||node.top>c.bottom||!visible(ranges,node.start,node.end))return;
-        // The capsule is convex. A bounding box contained by it needs no per-segment math.
-        if (node.end - node.start > 3 && c.includes(node.left, node.top, radius * radius)
-                && c.includes(node.right, node.top, radius * radius)
-                && c.includes(node.right, node.bottom, radius * radius)
-                && c.includes(node.left, node.bottom, radius * radius)) {
-            hits.add(node.start, node.end);
-            return;
-        }
         if(node.a!=null){query(node.a,ranges,c,hits,radius,baseRadius);query(node.b,ranges,c,hits,radius,baseRadius);return;}
         if (ranges == null) {
             querySegments(node.start, node.end, c, hits, radius, baseRadius);
@@ -80,22 +65,27 @@ final class StrokeData {
         double[] values=new double[16];int size;
         void add(double a,double b){if(b-a<1e-9)return;if(size>=2&&a<=values[size-1]+1e-9){values[size-1]=Math.max(values[size-1],b);return;}if(size+2>values.length)values=Arrays.copyOf(values,values.length*2);values[size++]=a;values[size++]=b;}
     }
-    private static final class Sweep {
-        final Intervals hits = new Intervals(), result = new Intervals();
-        final Capsule capsule = new Capsule();
-    }
-
     private static final class Capsule {
-        double ax,ay,bx,by,r,rSquared,len,vx,vy,left,top,right,bottom;double lo,hi,rlo,rhi;
-        void set(double ax,double ay,double bx,double by,double r){this.ax=ax;this.ay=ay;this.bx=bx;this.by=by;this.r=r;rSquared=r*r;len=Math.hypot(bx-ax,by-ay);vx=len>1e-9?(bx-ax)/len:1;vy=len>1e-9?(by-ay)/len:0;left=Math.min(ax,bx)-r;right=Math.max(ax,bx)+r;top=Math.min(ay,by)-r;bottom=Math.max(ay,by)+r;}
+        final double ax,ay,bx,by,r,rSquared,len,vx,vy,left,top,right,bottom;double lo,hi,rlo,rhi;
+        Capsule(double ax,double ay,double bx,double by,double r){this.ax=ax;this.ay=ay;this.bx=bx;this.by=by;this.r=r;rSquared=r*r;len=Math.hypot(bx-ax,by-ay);vx=len>1e-9?(bx-ax)/len:1;vy=len>1e-9?(by-ay)/len:0;left=Math.min(ax,bx)-r;right=Math.max(ax,bx)+r;top=Math.min(ay,by)-r;bottom=Math.max(ay,by)+r;}
         private boolean includes(double x, double y, double radiusSquared) {
             double along = Math.max(0, Math.min(len, x * vx + y * vy));
             double px = x - along * vx, py = y - along * vy;
             return px * px + py * py < radiusSquared;
         }
 
+        private boolean coverWholeSegment(double x, double y, double nx, double ny,
+                                          double startRadiusSquared, double endRadiusSquared) {
+            if (!includes(x - ax, y - ay, startRadiusSquared)
+                    || !includes(nx - ax, ny - ay, endRadiusSquared)) return false;
+            lo = 0;
+            hi = 1;
+            return true;
+        }
+
         boolean hit(double x,double y,double nx,double ny) {
             if (Math.max(x,nx)<left||Math.min(x,nx)>right||Math.max(y,ny)<top||Math.min(y,ny)>bottom) return false;
+            if (coverWholeSegment(x, y, nx, ny, rSquared, rSquared)) return true;
             double dx=nx-x,dy=ny-y;
             lo=Double.POSITIVE_INFINITY;hi=Double.NEGATIVE_INFINITY;
             circle(x-ax,y-ay,dx,dy);
@@ -108,6 +98,8 @@ final class StrokeData {
         }
         boolean hitVariable(double x,double y,double nx,double ny,double radius,double change) {
             if (Math.max(x,nx)<left || Math.min(x,nx)>right || Math.max(y,ny)<top || Math.min(y,ny)>bottom) return false;
+            double endRadius = radius + change;
+            if (coverWholeSegment(x, y, nx, ny, radius * radius, endRadius * endRadius)) return true;
             double dx=nx-x, dy=ny-y, px=x-ax, py=y-ay;
             lo=Double.POSITIVE_INFINITY;
             hi=Double.NEGATIVE_INFINITY;
