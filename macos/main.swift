@@ -48,7 +48,7 @@ final class EdgeGlowView: NSView {
 }
 
 final class ScreenshotHUD: NSObject, NSApplicationDelegate {
-    private var panel: NSPanel!
+    private var panels: [CGDirectDisplayID: NSPanel] = [:]
     private var configuration: AppConfiguration!
     private var receiver: FastScreenshotReceiver?
     private var questions: QuestionLink?
@@ -66,7 +66,7 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         do { configuration = try AppConfiguration.load() }
         catch { fputs("PadPaste: \(error.localizedDescription)\n", stderr); exit(1) }
         if CommandLine.arguments.contains("--check-config") { print("Configuration valid"); exit(0) }
-        makePanel()
+        if configuration.flashEnabled { updatePanels() }
         let nativeReceiver = FastScreenshotReceiver(configuration: configuration) { [weak self] name in
             guard let self else { return }
             self.show()
@@ -200,8 +200,32 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { [weak panel] in panel?.orderOut(nil) }
     }
 
-    private func makePanel() {
-        panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
+    private func updatePanels() {
+        var current: [CGDirectDisplayID: NSPanel] = [:]
+        for screen in NSScreen.screens {
+            guard let id = displayID(for: screen) else { continue }
+            if let panel = panels.removeValue(forKey: id) {
+                if panel.frame == screen.frame {
+                    current[id] = panel
+                    continue
+                }
+                panel.orderOut(nil)
+            }
+            current[id] = makePanel(for: screen)
+        }
+        for panel in panels.values { panel.orderOut(nil) }
+        panels = current
+    }
+
+    private func makePanel(for screen: NSScreen) -> NSPanel {
+        let bounds = NSRect(origin: .zero, size: screen.frame.size)
+        let panel = NSPanel(contentRect: bounds, styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false, screen: screen)
+        panel.setFrame(screen.frame, display: false)
         panel.title = "平板截图边缘提示"
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -212,13 +236,24 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
         panel.isReleasedWhenClosed = false
-        if let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == CGMainDisplayID() }) {
-            panel.setFrame(screen.frame, display: false)
-            let glow = EdgeGlowView(frame: NSRect(origin: .zero, size: screen.frame.size))
-            glow.updateLayerImage()
-            panel.contentView = glow
-        } else {
-            panel.contentView = EdgeGlowView(frame: .zero)
+        let glow = EdgeGlowView(frame: bounds)
+        glow.updateLayerImage()
+        glow.layer?.opacity = 0
+        panel.contentView = glow
+        return panel
+    }
+
+    func applicationDidChangeScreenParameters(_ notification: Notification) {
+        guard configuration?.flashEnabled == true else { return }
+        finishTask?.cancel()
+        hidePanels()
+        updatePanels()
+    }
+
+    private func hidePanels() {
+        for panel in panels.values {
+            panel.orderOut(nil)
+            panel.contentView?.layer?.removeAnimation(forKey: "screenshotEdgeFlash")
         }
     }
 
@@ -226,28 +261,24 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
 
     private func show() {
         guard configuration.flashEnabled else { return }
-        let primaryID = CGMainDisplayID()
-        guard let screen = NSScreen.screens.first(where: {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == primaryID
-        }) else { return }
         finishTask?.cancel()
-        panel.setFrame(screen.frame, display: false)
-        (panel.contentView as? EdgeGlowView)?.updateLayerImage()
-        panel.contentView?.needsDisplay = true
-        guard let layer = panel.contentView?.layer else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.opacity = 0
-        CATransaction.commit()
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        updatePanels()
         let flash = CAKeyframeAnimation(keyPath: "opacity")
         flash.values = [0, 1, 0]
         flash.keyTimes = [0, 0.16, 1]
         flash.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut)]
         flash.duration = configuration.flashDuration
-        layer.add(flash, forKey: "screenshotEdgeFlash")
-        let finish = DispatchWorkItem { [weak self] in self?.panel.orderOut(nil) }
+        CATransaction.begin()
+        for (id, panel) in panels {
+            panel.orderFrontRegardless()
+            if let screen = panel.screen, displayID(for: screen) == id, panel.frame == screen.frame {
+                panel.contentView?.layer?.add(flash, forKey: "screenshotEdgeFlash")
+            } else {
+                panel.orderOut(nil)
+            }
+        }
+        CATransaction.commit()
+        let finish = DispatchWorkItem { [weak self] in self?.hidePanels() }
         finishTask = finish
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.flashDuration, execute: finish)
     }
