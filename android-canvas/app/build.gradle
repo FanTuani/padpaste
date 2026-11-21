@@ -1,0 +1,43 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'io.github.fantuani.draftcanvas'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'io.github.fantuani.draftcanvas'
+        minSdk 26
+        targetSdk 35
+        versionCode 53
+        versionName '0.1.52'
+        testInstrumentationRunner 'io.github.fantuani.draftcanvas.CanvasTestRunner'
+    }
+    flavorDimensions 'device'
+    productFlavors {
+        standard { dimension 'device'; manifestPlaceholders = [appLabel: '草稿'] }
+        xiaomi {
+            dimension 'device'
+            // HyperOS hardcodes this uninstalled demo package in its stylus shortcut exemption list.
+            // No Xiaomi signing identity, privileged permissions, or system packages are modified.
+            applicationId 'com.miui.pen.demo'
+            versionNameSuffix '-xiaomi'
+            manifestPlaceholders = [appLabel: '草稿·小米笔']
+        }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    sourceSets.main.java.srcDir '../../android-native/app/src/main/java'
+    signingConfigs {
+        release {
+            if (System.getenv('PADPASTE_KEYSTORE')) {
+                storeFile file(System.getenv('PADPASTE_KEYSTORE'))
+                storePassword System.getenv('PADPASTE_STORE_PASSWORD')
+                keyAlias 'padpaste'
+                keyPassword System.getenv('PADPASTE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug { applicationIdSuffix '.debug' }
+        release { minifyEnabled false; if (System.getenv('PADPASTE_KEYSTORE')) signingConfig signingConfigs.release }
+    }
+    lint { abortOnError true }
+}
+dependencies { testImplementation 'junit:junit:4.13.2' }

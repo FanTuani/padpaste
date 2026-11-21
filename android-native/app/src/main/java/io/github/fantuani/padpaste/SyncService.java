@@ -18,6 +18,7 @@ public final class SyncService extends Service {
     static final String STOP="io.github.fantuani.padpaste.STOP";
     static final String RECONFIGURE="io.github.fantuani.padpaste.RECONFIGURE";
     static final int NOTIFICATION=21;
+    public static final String STATE_ACTION = SyncState.ACTION;
     private static final class Capture {
         String name,path; long noticed,next;
         Capture(String n,String p){name=n;path=p;noticed=SystemClock.elapsedRealtime();}
@@ -37,7 +38,28 @@ public final class SyncService extends Service {
     private final Runnable scanLoop=new Runnable(){public void run(){if(!SyncState.running)return;scan();worker.postDelayed(this,5000);}};
     private final Runnable processLoop=this::process;
 
-    static boolean filesAllowed(Context c){
+    public static boolean enabled(Context context) { return Config.prefs(context).getBoolean("enabled", false); }
+
+    public static void setEnabled(Context context, boolean enabled) {
+        SharedPreferences prefs = Config.prefs(context);
+        SharedPreferences.Editor edit = prefs.edit().putBoolean("enabled", enabled);
+        if (enabled && !prefs.getBoolean("enabled", false)) edit.putLong("baseline", System.currentTimeMillis());
+        edit.apply();
+        if (enabled) resumeMonitoring(context);
+        else context.stopService(new Intent(context, SyncService.class));
+    }
+
+    public static void resumeMonitoring(Context context) {
+        if (enabled(context) && !SyncState.running && filesAllowed(context) && configured(context)) {
+            context.startForegroundService(new Intent(context, SyncService.class));
+        }
+    }
+
+    private static boolean configured(Context context) {
+        return DuplexSync.get(context).paired() || new Config(context).valid();
+    }
+
+    public static boolean filesAllowed(Context c){
         return Build.VERSION.SDK_INT>=30 ? Environment.isExternalStorageManager() : c.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED;
     }
     @Override public void onCreate(){
@@ -57,9 +79,10 @@ public final class SyncService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&STOP.equals(intent.getAction())){Config.prefs(this).edit().putBoolean("enabled",false).apply();stopSelf();return START_NOT_STICKY;}
         if(!Config.prefs(this).getBoolean("enabled",false)){stopSelf();return START_NOT_STICKY;}
-        if(!filesAllowed(this)||!new Config(this).valid()){
+        if(!filesAllowed(this)||!configured(this)){
             SyncState.phase=!filesAllowed(this)?"需要文件访问权限":"需要配置配对信息";SyncState.publish(this);stopSelf();return START_NOT_STICKY;
         }
+        DuplexSync.get(this).monitor(true);
         boolean reload=intent!=null&&RECONFIGURE.equals(intent.getAction());
         worker.post(()->{if(!initialized||reload)initialize();});
         return START_STICKY;
@@ -120,7 +143,14 @@ public final class SyncService extends Service {
                 throw new IOException("系统未完成截图写入");
             }
             SyncState.phase="正在上传";SyncState.publish(this);attempted=true;
-            long started=SystemClock.elapsedRealtime();MacClient.upload(config,capture.name,data);duration=SystemClock.elapsedRealtime()-started;uploaded=true;
+            long started=SystemClock.elapsedRealtime();
+            DuplexSync link = DuplexSync.get(this);
+            if (link.duplex() || (link.paired() && (!link.connected() || !config.valid()))) {
+                link.upload(capture.name, data);
+            } else {
+                MacClient.upload(config, capture.name, data);
+            }
+            duration=SystemClock.elapsedRealtime()-started;uploaded=true;
         }catch(Exception e){error=friendly(e);}
         // Every capture gets one network attempt. Success or failure both end in cleanup.
         boolean cleaned=cleanCapture(capture.name,capture.path);
@@ -159,17 +189,26 @@ public final class SyncService extends Service {
     private void popup(String message){ui.post(()->{if(feedback!=null)feedback.cancel();feedback=Toast.makeText(this,message,Toast.LENGTH_SHORT);feedback.show();});}
     private void checkConnection(){
         if(config==null)return;
+        DuplexSync link = DuplexSync.get(this);
+        if (link.paired()) {
+            SyncState.connection(this, link.connected(), "");
+            return;
+        }
         try{MacClient.check(config);SyncState.connection(this,true,"");}
         catch(Exception e){SyncState.connection(this,false,friendly(e));}
     }
     static String friendly(Exception e){String s=e.getMessage();return s==null?e.getClass().getSimpleName():s;}
     private Notification notification(String text){
-        PendingIntent open=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+        Intent openApp = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (openApp == null) openApp = new Intent(this, MainActivity.class);
+        openApp.putExtra("open_sync", true);
+        PendingIntent open=PendingIntent.getActivity(this,0,openApp,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop=PendingIntent.getService(this,1,new Intent(this,SyncService.class).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        return new Notification.Builder(this,"sync").setSmallIcon(io.github.fantuani.padpaste.R.drawable.ic_padpaste).setContentTitle("PadPaste").setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(new Notification.Action.Builder(null,"暂停",stop).build()).build();
+        return new Notification.Builder(this,"sync").setSmallIcon(getApplicationInfo().icon).setContentTitle("PadPaste").setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(new Notification.Action.Builder(null,"暂停",stop).build()).build();
     }
     private void updateNotification(String text){getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(text));}
     @Override public void onDestroy(){
+        DuplexSync.get(this).monitor(false);
         SyncState.running=false;SyncState.phase="已暂停";SyncState.publish(this);
         if(observer!=null)observer.stopWatching();
         if(connectivity!=null&&networkCallback!=null)try{connectivity.unregisterNetworkCallback(networkCallback);}catch(RuntimeException ignored){}

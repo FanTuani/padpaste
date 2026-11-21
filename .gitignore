@@ -19,3 +19,7 @@ android-native/app/build/
 
 *.p12
 *.apk
+
+android-canvas/.gradle/
+android-canvas/local.properties
+android-canvas/app/build/

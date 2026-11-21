@@ -4,6 +4,7 @@ import ImageIO
 import CryptoKit
 
 final class FastScreenshotReceiver {
+    static let tabletOrigin = NSPasteboard.PasteboardType("io.github.fantuani.padpaste.tablet-origin")
     private var listener: NWListener?
     private var discovery: NWListener?
     private let queue = DispatchQueue(label: "tablet.screenshot.receive", qos: .userInitiated)
@@ -58,6 +59,20 @@ final class FastScreenshotReceiver {
         udp.start(queue: queue)
     }
 
+    func receive(name: String, body: Data, completion: @escaping (Bool) -> Void) {
+        guard name.range(of: Self.screenshotName, options: .regularExpression) != nil else {
+            completion(false)
+            return
+        }
+        queue.async {
+            self.accept(name: name, body: body, began: Date().timeIntervalSince1970 * 1000) { code, _ in
+                completion(code == 200)
+            }
+        }
+    }
+
+    fileprivate static let screenshotName = "^Screenshot_[A-Za-z0-9._-]{1,220}\\.(jpg|jpeg|png|webp)$"
+
     private func accept(name: String, body: Data, began: Double, respond: @escaping (Int, String) -> Void) {
         if committed.contains(name) { respond(200, "duplicate"); return }
         let bodyDone = Date().timeIntervalSince1970 * 1000
@@ -75,6 +90,7 @@ final class FastScreenshotReceiver {
             guard let self else { respond(503, "stopped"); return }
             let item = NSPasteboardItem()
             item.setData(tiff, forType: .tiff)
+            item.setString("1", forType: Self.tabletOrigin)
             if ["jpg", "jpeg"].contains(extensionName) {
                 item.setData(body, forType: NSPasteboard.PasteboardType("public.jpeg"))
             } else if extensionName == "png" {
@@ -156,7 +172,7 @@ private final class ScreenshotRequest {
                           let size = Int(headers["content-length"] ?? ""), size > 0, size <= 50*1024*1024 else { respond(413, "invalid size"); return }
                     let path = String(request[1])
                     guard path.hasPrefix("/screenshot/"), let filename=String(path.dropFirst(12)).removingPercentEncoding,
-                          filename.range(of: "^Screenshot_[A-Za-z0-9._-]{1,220}\\.(jpg|jpeg|png|webp)$", options: .regularExpression) != nil else { respond(400, "invalid filename"); return }
+                          filename.range(of: FastScreenshotReceiver.screenshotName, options: .regularExpression) != nil else { respond(400, "invalid filename"); return }
                     name=filename;length=size;buffer.removeSubrange(..<split.upperBound)
                 } else if buffer.count > 8192 { respond(431, "header too large"); return }
             }
