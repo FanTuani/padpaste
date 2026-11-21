@@ -4,6 +4,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
@@ -20,6 +21,7 @@ final class QuestionInk {
 
     private final ArrayList<Photo> photos = new ArrayList<>();
     private final Paint invert = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+    private final Path photoArea = new Path();
     private int count;
 
     QuestionInk() {
@@ -47,6 +49,16 @@ final class QuestionInk {
             if (RectF.intersects(bounds, photos.get(index).bounds)) return true;
         }
         return false;
+    }
+
+    void clipOutside(Canvas canvas) {
+        for (int index = 0; index < count; index++) canvas.clipOutRect(photos.get(index).bounds);
+    }
+
+    boolean clipInside(Canvas canvas) {
+        photoArea.rewind();
+        for (int index = 0; index < count; index++) photoArea.addRect(photos.get(index).bounds, Path.Direction.CW);
+        return canvas.clipPath(photoArea);
     }
 
     void draw(Canvas canvas, RectF inkBounds) {

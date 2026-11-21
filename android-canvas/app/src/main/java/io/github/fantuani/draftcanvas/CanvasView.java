@@ -22,7 +22,8 @@ public final class CanvasView extends View {
     private static final float RESIZE_HANDLE_DP = 20f;
     private static final float PHOTO_RESIZE_HIT_RADIUS_DP = 24f;
     public final Ink ink;
-    public int mode=PEN,color=0xFF243137;public float width,eraserSize,eraserSensitivity=2;
+    static final int DEFAULT_PEN_COLOR = 0xFF243137;
+    public int mode=PEN,color=DEFAULT_PEN_COLOR;public float width,eraserSize,eraserSensitivity=2;
     private float penPressureThreshold;
     float penSensitivity = DEFAULT_PEN_SENSITIVITY;
     public Runnable changed=()->{};
@@ -42,6 +43,8 @@ public final class CanvasView extends View {
     private final QuestionInk questionInk = new QuestionInk();
     private final RectF compositedInkBounds = new RectF();
     private final RectF liveInkBounds = new RectF();
+    private final Rect mixedInkClip = new Rect();
+    private final RectF mixedStrokeBounds = new RectF();
     private final InkBounds cachedInkBounds = new InkBounds(), movedInkBounds = new InkBounds();
     private long cachedInkRevision = -1;
     private final DashPathEffect lassoDashes = new DashPathEffect(new float[]{dp(5), dp(4)}, 0);
@@ -75,13 +78,19 @@ public final class CanvasView extends View {
     }
     private static final class InkBounds {
         double left, top, right, bottom;
+        boolean hasColoredInk;
 
         void reset() {
             left = top = Double.POSITIVE_INFINITY;
             right = bottom = Double.NEGATIVE_INFINITY;
+            hasColoredInk = false;
         }
 
         void include(Ink.Stroke stroke, double x, double y, double scale) {
+            if (stroke.color != DEFAULT_PEN_COLOR) {
+                hasColoredInk = true;
+                return;
+            }
             left = Math.min(left, x + (stroke.left - stroke.x) * scale);
             top = Math.min(top, y + (stroke.top - stroke.y) * scale);
             right = Math.max(right, x + (stroke.right - stroke.x) * scale);
@@ -257,11 +266,12 @@ public final class CanvasView extends View {
         super.onDraw(c);drawGrid(c);
         drawQuestions(c, !ink.strokes.isEmpty() || !liveStroke.isEmpty());
         boolean invertInk = !questionInk.isEmpty() && findInvertedInkBounds();
-        int inkLayer = invertInk ? c.saveLayer(compositedInkBounds, null) : -1;
-        drawCanvasInk(c, invertInk);
-        if (invertInk) {
-            questionInk.draw(c, compositedInkBounds);
-            c.restoreToCount(inkLayer);
+        if (invertInk && hasColoredInk()) {
+            drawMixedInk(c);
+        } else {
+            int inkLayer = invertInk ? c.saveLayer(compositedInkBounds, null) : -1;
+            drawCanvasInk(c, invertInk);
+            if (invertInk) finishInvertedInkLayer(c, inkLayer);
         }
         questionInk.clear();
         drawLasso(c);
@@ -284,14 +294,67 @@ public final class CanvasView extends View {
         }else if(Build.VERSION.SDK_INT>=29&&c.isHardwareAccelerated()&&!fingers&&!dragging&&dragX==0&&dragY==0)
             tiles.draw(c,getWidth(),getHeight(),ink.view.x,ink.view.y,ink.view.scale,this::drawInk);
         else drawInk(c,0,0,getWidth(),getHeight());
-        if (!liveStroke.isEmpty()) {
-            c.save();
-            c.translate(screenX(strokeX), screenY(strokeY));
-            c.scale((float)ink.view.scale, (float)ink.view.scale);
-            setStrokePaint(strokeColor, strokeWidth);
-            liveStroke.draw(c, paint, strokeWidth, ink.view.scale, strokeSensitivity > 0);
-            c.restore();
+        drawLiveInk(c);
+    }
+
+    private void drawLiveInk(Canvas c) {
+        if (liveStroke.isEmpty()) return;
+        c.save();
+        c.translate(screenX(strokeX), screenY(strokeY));
+        c.scale((float) ink.view.scale, (float) ink.view.scale);
+        setStrokePaint(strokeColor, strokeWidth);
+        liveStroke.draw(c, paint, strokeWidth, ink.view.scale, strokeSensitivity > 0);
+        c.restore();
+    }
+
+    private boolean hasColoredInk() {
+        InkBounds bounds = dragging ? movedInkBounds : cachedInkBounds;
+        return bounds.hasColoredInk || (!liveStroke.isEmpty() && strokeColor != DEFAULT_PEN_COLOR);
+    }
+
+    private void finishInvertedInkLayer(Canvas c, int layer) {
+        questionInk.draw(c, compositedInkBounds);
+        c.restoreToCount(layer);
+    }
+
+    private void drawMixedInk(Canvas c) {
+        // Keep the cached ink outside photos. Inside, preserve stroke order when mixing colors.
+        c.save();
+        questionInk.clipOutside(c);
+        drawCanvasInk(c, false);
+        c.restore();
+
+        c.save();
+        if (questionInk.clipInside(c) && c.getClipBounds(mixedInkClip)) {
+            double left = wx(mixedInkClip.left), top = wy(mixedInkClip.top);
+            double right = wx(mixedInkClip.right), bottom = wy(mixedInkClip.bottom);
+            int blackLayer = -1;
+            for (Ink.Stroke stroke : ink.strokes) {
+                boolean transform = dragging && ink.selected.contains(stroke.id);
+                double scale = transform ? selectionScale : 1;
+                double x = transform ? selectionBox.left + (stroke.x - selectionBox.left) * scale + dragX : stroke.x;
+                double y = transform ? selectionBox.top + (stroke.y - selectionBox.top) * scale + dragY : stroke.y;
+                mixedStrokeBounds.set(screenX(x + (stroke.left - stroke.x) * scale),
+                        screenY(y + (stroke.top - stroke.y) * scale),
+                        screenX(x + (stroke.right - stroke.x) * scale),
+                        screenY(y + (stroke.bottom - stroke.y) * scale));
+                if (!questionInk.intersects(mixedStrokeBounds)) continue;
+                blackLayer = orderedInkLayer(c, blackLayer, stroke.color);
+                drawInkStroke(c, stroke, left, top, right, bottom);
+            }
+            if (!liveStroke.isEmpty()) {
+                blackLayer = orderedInkLayer(c, blackLayer, strokeColor);
+                drawLiveInk(c);
+            }
+            if (blackLayer != -1) finishInvertedInkLayer(c, blackLayer);
         }
+        c.restore();
+    }
+
+    private int orderedInkLayer(Canvas c, int layer, int color) {
+        if (color == DEFAULT_PEN_COLOR) return layer != -1 ? layer : c.saveLayer(compositedInkBounds, null);
+        if (layer != -1) finishInvertedInkLayer(c, layer);
+        return -1;
     }
 
     private boolean findInvertedInkBounds() {
@@ -314,7 +377,7 @@ public final class CanvasView extends View {
             compositedInkBounds.set(screenX(bounds.left), screenY(bounds.top),
                     screenX(bounds.right), screenY(bounds.bottom));
         }
-        if (!liveStroke.isEmpty()) {
+        if (!liveStroke.isEmpty() && strokeColor == DEFAULT_PEN_COLOR) {
             liveStroke.bounds(liveInkBounds, strokeWidth);
             compositedInkBounds.union(screenX(strokeX + liveInkBounds.left), screenY(strokeY + liveInkBounds.top),
                     screenX(strokeX + liveInkBounds.right), screenY(strokeY + liveInkBounds.bottom));
@@ -572,27 +635,29 @@ public final class CanvasView extends View {
         c.drawLine(x + tip, y + tip, x + tip, y + tip - wing, paint);
     }
 
-    private void drawInk(android.graphics.Canvas c,int left,int top,int right,int bottom){
-        double l=wx(left),t=wy(top),r=wx(right),b=wy(bottom);
-        for (Ink.Stroke stroke : ink.strokes) {
-            boolean transform = dragging && ink.selected.contains(stroke.id);
-            double factor = transform ? selectionScale : 1;
-            double x = stroke.x, y = stroke.y;
-            if (transform) {
-                x = selectionBox.left + (x - selectionBox.left) * factor + dragX;
-                y = selectionBox.top + (y - selectionBox.top) * factor + dragY;
-            }
-            double localLeft = (l - x) / factor, localTop = (t - y) / factor;
-            double localRight = (r - x) / factor, localBottom = (b - y) / factor;
-            if (!stroke.intersects(stroke.x + localLeft, stroke.y + localTop,
-                    stroke.x + localRight, stroke.y + localBottom)) continue;
-            c.save();
-            c.translate(screenX(x), screenY(y));
-            float scale = (float) (ink.view.scale * factor);
-            c.scale(scale, scale);
-            drawStrokeShape(c, stroke, localLeft, localTop, localRight, localBottom);
-            c.restore();
+    private void drawInk(Canvas c, int left, int top, int right, int bottom) {
+        double l = wx(left), t = wy(top), r = wx(right), b = wy(bottom);
+        for (Ink.Stroke stroke : ink.strokes) drawInkStroke(c, stroke, l, t, r, b);
+    }
+
+    private void drawInkStroke(Canvas c, Ink.Stroke stroke, double l, double t, double r, double b) {
+        boolean transform = dragging && ink.selected.contains(stroke.id);
+        double factor = transform ? selectionScale : 1;
+        double x = stroke.x, y = stroke.y;
+        if (transform) {
+            x = selectionBox.left + (x - selectionBox.left) * factor + dragX;
+            y = selectionBox.top + (y - selectionBox.top) * factor + dragY;
         }
+        double localLeft = (l - x) / factor, localTop = (t - y) / factor;
+        double localRight = (r - x) / factor, localBottom = (b - y) / factor;
+        if (!stroke.intersects(stroke.x + localLeft, stroke.y + localTop,
+                stroke.x + localRight, stroke.y + localBottom)) return;
+        c.save();
+        c.translate(screenX(x), screenY(y));
+        float scale = (float) (ink.view.scale * factor);
+        c.scale(scale, scale);
+        drawStrokeShape(c, stroke, localLeft, localTop, localRight, localBottom);
+        c.restore();
     }
     @Override protected void onDetachedFromWindow(){stopZoomAnimation();if(raster!=null){raster.close();raster=null;}if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}

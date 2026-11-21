@@ -56,7 +56,7 @@ final class FanMenu extends ViewGroup {
 
     void showTools(float x, float y, int activeColor, boolean hasInk) {
         prepare(x, y, false);
-        swatch("墨黑", INK, activeColor);
+        swatch("墨黑", CanvasView.DEFAULT_PEN_COLOR, activeColor);
         swatch("朱红", 0xFFCF4941, activeColor);
         swatch("靛蓝", 0xFF3169CA, activeColor);
         swatch("青绿", TEAL, activeColor);

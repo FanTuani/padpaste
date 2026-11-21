@@ -319,7 +319,7 @@ public final class CanvasTestRunner extends Instrumentation {
         view.testAsync = true;
         view.width = 12;
         view.penSensitivity = 0;
-        view.color = 0xFF864321;
+        view.color = CanvasView.DEFAULT_PEN_COLOR;
         Bitmap photo = Bitmap.createBitmap(256, 80, Bitmap.Config.ARGB_8888);
         Canvas image = new Canvas(photo);
         android.graphics.Paint fill = new android.graphics.Paint();
