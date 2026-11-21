@@ -78,7 +78,7 @@ final class QuestionInbox implements DuplexSync.Listener {
         overlay.addView(ripple, new FrameLayout.LayoutParams(-1, -1));
         importButton = button(overlay, "导入", Color.WHITE, 0xFF167B70, 74, this::accept);
         cancelButton = button(overlay, "取消", 0xFF40524E, 0xF5FFFEFA, 62, this::cancelOffer);
-        locateButton = button(overlay, "查看题图", 0xFF167B70, 0xFFFFFEFA, 92, () -> {
+        locateButton = button(overlay, "查看题图", Color.WHITE, 0xFF0C5748, 92, () -> {
             if (placement != null) canvas.locateQuestion(placement);
         });
         canvas.getViewTreeObserver().addOnPreDrawListener(() -> {
@@ -239,7 +239,10 @@ final class QuestionInbox implements DuplexSync.Listener {
         cancelButton.setEnabled(pending);
         visibility(importButton, inline);
         visibility(cancelButton, inline);
-        visibility(locateButton, pending && !inline);
+        boolean showLocator = pending && !inline;
+        boolean entering = showLocator && locateButton.getVisibility() != View.VISIBLE;
+        if (!showLocator && locateButton.getVisibility() == View.VISIBLE) locateButton.animate().cancel();
+        visibility(locateButton, showLocator);
         if (inline) {
             float x = bounds.centerX(), y = bounds.centerY() + offerLift;
             float gap = dp(8);
@@ -248,14 +251,23 @@ final class QuestionInbox implements DuplexSync.Listener {
                     ? x + offset : x - offset;
             position(importButton, x, y);
             position(cancelButton, cancelX, y);
-        } else if (pending) {
+        } else if (showLocator) {
             position(locateButton, bounds.centerX(), bounds.centerY());
+            if (entering || locatePulsePending) animateLocator();
             if (locatePulsePending && locateButton.getWidth() > 0) {
                 ripple.pulse(locateButton.getX() + locateButton.getWidth() / 2f,
                         locateButton.getY() + locateButton.getHeight() / 2f);
             }
         }
         if (inline || (pending && locateButton.getWidth() > 0)) locatePulsePending = false;
+    }
+
+    private void animateLocator() {
+        locateButton.animate().cancel();
+        locateButton.setScaleX(1.18f);
+        locateButton.setScaleY(1.18f);
+        locateButton.animate().scaleX(1).scaleY(1).setDuration(320)
+                .setInterpolator(new PathInterpolator(.18f, .72f, .28f, 1f)).start();
     }
 
     private void visibility(View view, boolean visible) {
@@ -265,7 +277,7 @@ final class QuestionInbox implements DuplexSync.Listener {
 
     private void position(View view, float x, float y) {
         float halfWidth = view.getMeasuredWidth() / 2f, halfHeight = view.getMeasuredHeight() / 2f;
-        float edge = dp(8);
+        float edge = dp(view == locateButton ? 13 : 8);
         view.setTranslationX(Math.max(edge, Math.min(canvas.getWidth() - edge - 2 * halfWidth, x - halfWidth)));
         view.setTranslationY(Math.max(edge, Math.min(canvas.getHeight() - edge - 2 * halfHeight, y - halfHeight)));
     }
@@ -347,7 +359,7 @@ final class QuestionInbox implements DuplexSync.Listener {
         controlsAlpha = controls;
         canvas.styleQuestionOffer(alpha, scale, lift);
         float buttonScale = .91f + .09f * controlsAlpha;
-        for (TextView button : new TextView[]{importButton, cancelButton, locateButton}) {
+        for (TextView button : new TextView[]{importButton, cancelButton}) {
             button.setAlpha(controlsAlpha);
             button.setScaleX(buttonScale);
             button.setScaleY(buttonScale);
@@ -387,7 +399,7 @@ final class QuestionInbox implements DuplexSync.Listener {
         GradientDrawable surface = new GradientDrawable();
         surface.setColor(background);
         surface.setCornerRadius(dp(20));
-        if (background != 0xFF167B70) surface.setStroke(dp(1), 0xFFE2E8E3);
+        if (color != Color.WHITE) surface.setStroke(dp(1), 0xFFE2E8E3);
         button.setBackground(new android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf(0x1993AEA3), surface, null));
         button.setElevation(dp(2));

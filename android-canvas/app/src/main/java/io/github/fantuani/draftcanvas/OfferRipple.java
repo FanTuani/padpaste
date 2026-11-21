@@ -28,8 +28,8 @@ final class OfferRipple extends View {
         if (animation != null) animation.cancel();
         progress = 0;
         animation = ValueAnimator.ofFloat(0, 1);
-        animation.setDuration(390);
-        animation.setInterpolator(new PathInterpolator(.15f, .57f, .26f, 1f));
+        animation.setDuration(500);
+        animation.setInterpolator(new PathInterpolator(.17f, .48f, .29f, 1f));
         animation.addUpdateListener(frame -> {
             progress = (float) frame.getAnimatedValue();
             postInvalidateOnAnimation();
