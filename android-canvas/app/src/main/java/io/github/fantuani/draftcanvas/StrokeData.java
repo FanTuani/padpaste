@@ -34,27 +34,72 @@ final class StrokeData {
     private void query(Node node,double[] ranges,Capsule c,Intervals hits,double radius,float baseRadius){
         if(node.right<c.left||node.left>c.right||node.bottom<c.top||node.top>c.bottom||!visible(ranges,node.start,node.end))return;
         if(node.a!=null){query(node.a,ranges,c,hits,radius,baseRadius);query(node.b,ranges,c,hits,radius,baseRadius);return;}
-        for(int i=node.start;i<node.end;i++) {
-            int p = i * 3;
-            boolean hit = baseRadius == 0
-                    ? c.hit(points[p], points[p + 1], points[p + 3], points[p + 4])
-                    : c.hitVariable(points[p], points[p + 1], points[p + 3], points[p + 4],
-                            radius + baseRadius * points[p + 2],
-                            baseRadius * (points[p + 5] - points[p + 2]));
-            if (hit) hits.add(i + c.lo, i + c.hi);
+        if (ranges == null) {
+            querySegments(node.start, node.end, c, hits, radius, baseRadius);
+            return;
+        }
+        // A previous sweep often leaves only a small portion of a leaf visible.
+        int cursor = node.start;
+        for (int i = first(ranges, cursor); i < ranges.length && ranges[i] < node.end; i += 2) {
+            int start = Math.max(cursor, (int) Math.floor(ranges[i]));
+            int end = Math.min(node.end, (int) Math.ceil(ranges[i + 1]));
+            querySegments(start, end, c, hits, radius, baseRadius);
+            cursor = Math.max(cursor, end);
         }
     }
+
+    private void querySegments(int start, int end, Capsule capsule, Intervals hits, double radius, float baseRadius) {
+        for (int i = start; i < end; i++) {
+            int p = i * 3;
+            boolean hit = baseRadius == 0
+                    ? capsule.hit(points[p], points[p + 1], points[p + 3], points[p + 4])
+                    : capsule.hitVariable(points[p], points[p + 1], points[p + 3], points[p + 4],
+                            radius + baseRadius * points[p + 2],
+                            baseRadius * (points[p + 5] - points[p + 2]));
+            if (hit) hits.add(i + capsule.lo, i + capsule.hi);
+        }
+    }
+
     float coordinate(double t,int axis){int i=Math.min(segments-1,(int)t);if(i<0)return points[axis];double f=t-i;return (float)(points[i*3+axis]+(points[(i+1)*3+axis]-points[i*3+axis])*f);}
     private static final class Intervals {
         double[] values=new double[16];int size;
         void add(double a,double b){if(b-a<1e-9)return;if(size>=2&&a<=values[size-1]+1e-9){values[size-1]=Math.max(values[size-1],b);return;}if(size+2>values.length)values=Arrays.copyOf(values,values.length*2);values[size++]=a;values[size++]=b;}
     }
     private static final class Capsule {
-        final double ax,ay,bx,by,r,len,vx,vy,left,top,right,bottom;double lo,hi,rlo,rhi;
-        Capsule(double ax,double ay,double bx,double by,double r){this.ax=ax;this.ay=ay;this.bx=bx;this.by=by;this.r=r;len=Math.hypot(bx-ax,by-ay);vx=len>1e-9?(bx-ax)/len:1;vy=len>1e-9?(by-ay)/len:0;left=Math.min(ax,bx)-r;right=Math.max(ax,bx)+r;top=Math.min(ay,by)-r;bottom=Math.max(ay,by)+r;}
-        boolean hit(double x,double y,double nx,double ny){if(Math.max(x,nx)<left||Math.min(x,nx)>right||Math.max(y,ny)<top||Math.min(y,ny)>bottom)return false;double dx=nx-x,dy=ny-y;lo=Double.POSITIVE_INFINITY;hi=Double.NEGATIVE_INFINITY;circle(x-ax,y-ay,dx,dy);circle(x-bx,y-by,dx,dy);if(len>1e-9){rlo=0;rhi=1;if(slab((x-ax)*vx+(y-ay)*vy,dx*vx+dy*vy,0,len)&&slab(-(x-ax)*vy+(y-ay)*vx,-dx*vy+dy*vx,-r,r))merge(rlo,rhi);}return hi-lo>1e-9;}
+        final double ax,ay,bx,by,r,rSquared,len,vx,vy,left,top,right,bottom;double lo,hi,rlo,rhi;
+        Capsule(double ax,double ay,double bx,double by,double r){this.ax=ax;this.ay=ay;this.bx=bx;this.by=by;this.r=r;rSquared=r*r;len=Math.hypot(bx-ax,by-ay);vx=len>1e-9?(bx-ax)/len:1;vy=len>1e-9?(by-ay)/len:0;left=Math.min(ax,bx)-r;right=Math.max(ax,bx)+r;top=Math.min(ay,by)-r;bottom=Math.max(ay,by)+r;}
+        private boolean includes(double x, double y, double radiusSquared) {
+            double along = Math.max(0, Math.min(len, x * vx + y * vy));
+            double px = x - along * vx, py = y - along * vy;
+            return px * px + py * py < radiusSquared;
+        }
+
+        private boolean coverWholeSegment(double x, double y, double nx, double ny,
+                                          double startRadiusSquared, double endRadiusSquared) {
+            if (!includes(x - ax, y - ay, startRadiusSquared)
+                    || !includes(nx - ax, ny - ay, endRadiusSquared)) return false;
+            lo = 0;
+            hi = 1;
+            return true;
+        }
+
+        boolean hit(double x,double y,double nx,double ny) {
+            if (Math.max(x,nx)<left||Math.min(x,nx)>right||Math.max(y,ny)<top||Math.min(y,ny)>bottom) return false;
+            if (coverWholeSegment(x, y, nx, ny, rSquared, rSquared)) return true;
+            double dx=nx-x,dy=ny-y;
+            lo=Double.POSITIVE_INFINITY;hi=Double.NEGATIVE_INFINITY;
+            circle(x-ax,y-ay,dx,dy);
+            if (len>1e-9) {
+                circle(x-bx,y-by,dx,dy);
+                rlo=0;rhi=1;
+                if(slab((x-ax)*vx+(y-ay)*vy,dx*vx+dy*vy,0,len)&&slab(-(x-ax)*vy+(y-ay)*vx,-dx*vy+dy*vx,-r,r))merge(rlo,rhi);
+            }
+            return hi-lo>1e-9;
+        }
         boolean hitVariable(double x,double y,double nx,double ny,double radius,double change) {
             if (Math.max(x,nx)<left || Math.min(x,nx)>right || Math.max(y,ny)<top || Math.min(y,ny)>bottom) return false;
+            double endRadius = radius + change;
+            if (coverWholeSegment(x, y, nx, ny, radius * radius, endRadius * endRadius)) return true;
             double dx=nx-x, dy=ny-y, px=x-ax, py=y-ay;
             lo=Double.POSITIVE_INFINITY;
             hi=Double.NEGATIVE_INFINITY;
@@ -102,7 +147,7 @@ final class StrokeData {
                 merge(Math.max(rlo,first),rhi);
             }
         }
-        void circle(double x,double y,double dx,double dy){double a=dx*dx+dy*dy,c=x*x+y*y-r*r;if(a<1e-18){if(c<0)merge(0,1);return;}double b=x*dx+y*dy,d=b*b-a*c;if(d<=0)return;double root=Math.sqrt(d);merge(Math.max(0,(-b-root)/a),Math.min(1,(-b+root)/a));}
+        void circle(double x,double y,double dx,double dy){double a=dx*dx+dy*dy,c=x*x+y*y-rSquared;if(a<1e-18){if(c<0)merge(0,1);return;}double b=x*dx+y*dy,d=b*b-a*c;if(d<=0)return;double root=Math.sqrt(d);merge(Math.max(0,(-b-root)/a),Math.min(1,(-b+root)/a));}
         void merge(double a,double b){if(b>a){lo=Math.min(lo,a);hi=Math.max(hi,b);}}
         boolean slab(double p,double d,double a,double b){if(Math.abs(d)<1e-12)return p>=a&&p<=b;double x=(a-p)/d,y=(b-p)/d;rlo=Math.max(rlo,Math.min(x,y));rhi=Math.min(rhi,Math.max(x,y));return rhi>rlo;}
     }
