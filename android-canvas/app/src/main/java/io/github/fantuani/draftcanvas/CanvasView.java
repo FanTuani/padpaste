@@ -261,14 +261,18 @@ public final class CanvasView extends View {
             questionDisplayBounds(question);
             if (photoBounds.intersects(0, 0, getWidth(), getHeight())) visibleQuestions.add(question);
         }
-        // A single-finger pan changes position only, so it can reuse the display-sized samples.
-        boolean useMotionSamples = (fingers && fingerCount == 2)
-                || zoomAnimator != null || photoGesture != null || dragging;
-        int edgeLimit = QuestionAssets.edgeLimit(visibleQuestions.size(), useMotionSamples);
+        boolean zooming = (fingers && fingerCount == 2) || zoomAnimator != null;
+        boolean resizingPhoto = photoGesture != null && photoGesture.resize && photoGesture.preview != null;
+        boolean resizingSelection = dragging && resizeContact;
+        int edgeLimit = QuestionAssets.edgeLimit(visibleQuestions.size());
+        int motionEdge = QuestionAssets.motionEdgeLimit(edgeLimit);
         for (QuestionImage question : visibleQuestions) {
             questionDisplayBounds(question);
-            int projected = (int) Math.ceil(Math.max(photoBounds.width(), photoBounds.height()) * 1.4);
-            int requestedEdge = Math.max(1, useMotionSamples ? edgeLimit : Math.min(edgeLimit, projected));
+            // Translation keeps the same sample. Only images changing size need the motion limit.
+            boolean useMotionSample = zooming || (resizingPhoto && question.id == photoGesture.original.id)
+                    || (resizingSelection && ink.selected.contains(question.id));
+            int projected = (int) Math.ceil(Math.max(question.width, question.height) * ink.view.scale * 1.4);
+            int requestedEdge = useMotionSample ? motionEdge : Math.max(1, Math.min(edgeLimit, projected));
             Bitmap bitmap = questionAssets.visible(question.asset, requestedEdge, redrawQuestions);
             if (bitmap != null) canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
         }

@@ -80,10 +80,13 @@ final class QuestionAssets {
         });
     }
 
-    static int edgeLimit(int images, boolean moving) {
+    static int edgeLimit(int images) {
         // Keep the visible working set below the LRU limit, including during a resolution change.
-        int budget = (int) Math.sqrt(CACHE_BYTES * .68 / (4L * Math.max(1, images)));
-        return moving ? Math.min(MOTION_EDGE, budget) : budget;
+        return (int) Math.sqrt(CACHE_BYTES * .68 / (4L * Math.max(1, images)));
+    }
+
+    static int motionEdgeLimit(int edgeLimit) {
+        return Math.max(1, Math.min(MOTION_EDGE, edgeLimit));
     }
 
     Bitmap visible(String asset, int edge, Runnable ready) {
