@@ -14,7 +14,9 @@ final class QuestionLink {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "padpaste.questions")
     private var tablet: QuestionPeer?
-    var statusChanged: ((Bool) -> Void)?
+    private var bluetooth: BluetoothLink?
+    var statusChanged: ((Bool, String?) -> Void)?
+    var bluetoothStatus: ((String) -> Void)?
     var receiveScreenshot: ((String, Data, @escaping (Bool) -> Void) -> Void)?
 
     init() throws {
@@ -71,21 +73,7 @@ final class QuestionLink {
     func start() {
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { connection.cancel(); return }
-            let peer = QuestionPeer(connection, key: self.key, queue: self.queue)
-            peer.start(lifecycle: { [weak self, weak peer] active in
-                guard let self, let peer else { return }
-                if active {
-                    let previous = self.tablet
-                    self.tablet = peer
-                    if previous !== peer { previous?.close() }
-                } else if self.tablet === peer {
-                    self.tablet = nil
-                } else { return }
-                self.publishAvailability()
-            }, availability: { [weak self, weak peer] in
-                guard let self, let peer, self.tablet === peer else { return }
-                self.publishAvailability()
-            }, receive: receiveScreenshot)
+            self.accept(.network(connection))
         }
         listener.stateUpdateHandler = { state in
             if case .failed(let error) = state { NSLog("PadPaste questions: %@", error.localizedDescription) }
@@ -93,9 +81,42 @@ final class QuestionLink {
         listener.start(queue: queue)
     }
 
+    func setBluetoothEnabled(_ enabled: Bool) {
+        if enabled {
+            guard bluetooth == nil else { return }
+            bluetooth = BluetoothLink(identity: Data(SHA256.hash(data: keyData)), opened: { [weak self] stream in
+                guard let self else { stream.stop(); return }
+                self.queue.async { self.accept(.bluetooth(stream)) }
+            }, status: { [weak self] status in self?.bluetoothStatus?(status) })
+        } else {
+            bluetooth?.stop()
+            bluetooth = nil
+            bluetoothStatus?("蓝牙备用 · 已关闭")
+        }
+    }
+
+    private func accept(_ transport: QuestionPeer.Transport) {
+        let peer = QuestionPeer(transport, key: key, queue: queue)
+        peer.start(lifecycle: { [weak self, weak peer] active in
+            guard let self, let peer else { return }
+            if active {
+                let previous = self.tablet
+                self.tablet = peer
+                if previous !== peer { previous?.close() }
+            } else if self.tablet === peer {
+                self.tablet = nil
+            } else { return }
+            self.publishAvailability()
+        }, availability: { [weak self, weak peer] in
+            guard let self, let peer, self.tablet === peer else { return }
+            self.publishAvailability()
+        }, receive: receiveScreenshot)
+    }
+
     private func publishAvailability() {
         let available = tablet?.acceptsQuestions == true
-        DispatchQueue.main.async { self.statusChanged?(available) }
+        let route = tablet.map { $0.bluetooth ? "蓝牙" : "Wi-Fi" }
+        DispatchQueue.main.async { self.statusChanged?(available, route) }
     }
 
     func send(_ image: Data, completion: @escaping (Bool) -> Void) {
@@ -129,7 +150,16 @@ final class QuestionLink {
 }
 
 private final class QuestionPeer {
-    private let connection: NWConnection
+    enum Transport {
+        case network(NWConnection)
+        case bluetooth(BluetoothStream)
+    }
+
+    private let transport: Transport
+    var bluetooth: Bool {
+        if case .bluetooth = transport { return true }
+        return false
+    }
     private let key: SymmetricKey
     private let queue: DispatchQueue
     private static let version = Data("PADSYNC2".utf8)
@@ -140,6 +170,7 @@ private final class QuestionPeer {
     private var availabilityChanged: (() -> Void)?
     private var receiveScreenshot: ((String, Data, @escaping (Bool) -> Void) -> Void)?
     private var receivingCapture = false
+    private var switchingToNetwork = false
     private(set) var acceptsQuestions = false
     private var notice: ((Bool) -> Void)?
     private var awaiting: ((Bool) -> Void)?
@@ -147,8 +178,8 @@ private final class QuestionPeer {
     private var expectedAck = Data()
     private var closed = false
 
-    init(_ connection: NWConnection, key: SymmetricKey, queue: DispatchQueue) {
-        self.connection = connection
+    init(_ transport: Transport, key: SymmetricKey, queue: DispatchQueue) {
+        self.transport = transport
         self.key = key
         self.queue = queue
     }
@@ -158,14 +189,19 @@ private final class QuestionPeer {
         notice = lifecycle
         availabilityChanged = availability
         receiveScreenshot = receive
-        // Retain the peer until close, including while the handshake is in progress.
-        connection.stateUpdateHandler = { state in
-            switch state {
-            case .failed, .cancelled: self.close()
-            default: break
+        // Keep the session alive until the transport closes, including the handshake.
+        switch transport {
+        case .network(let connection):
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .failed, .cancelled: self.close()
+                default: break
+                }
             }
+            connection.start(queue: queue)
+        case .bluetooth(let stream):
+            DispatchQueue.main.async { stream.start { self.queue.async { self.close() } } }
         }
-        connection.start(queue: queue)
         timeOut()
         read(32) { [weak self] clientNonce in
             guard let self else { return }
@@ -180,6 +216,7 @@ private final class QuestionPeer {
                 self.deadline?.cancel()
                 self.acceptsQuestions = !self.duplex
                 self.notice?(true)
+                guard !self.closed else { return }
                 if self.duplex {
                     self.startHeartbeat()
                     self.readFrame()
@@ -191,11 +228,13 @@ private final class QuestionPeer {
     }
 
     func send(_ image: Data, finish: @escaping (Bool) -> Void) {
-        guard !closed, awaiting == nil, image.count <= QuestionLink.byteLimit else { finish(false); return }
+        guard !closed, !switchingToNetwork, awaiting == nil, image.count <= QuestionLink.byteLimit else { finish(false); return }
         if duplex {
             awaiting = finish
-            timeOut()
-            writeFrame(1, image)
+            if !bluetooth { timeOut() }
+            writeFrame(1, image) { [weak self] in
+                if let self, self.bluetooth && self.awaiting != nil { self.timeOut() }
+            }
             return
         }
         guard let box = try? AES.GCM.seal(image, using: key, authenticating: message("image")),
@@ -215,20 +254,21 @@ private final class QuestionPeer {
         timer.resume()
     }
 
-    private func writeFrame(_ kind: UInt8, _ content: Data = Data()) {
+    private func writeFrame(_ kind: UInt8, _ content: Data = Data(), finish: @escaping () -> Void = {}) {
         var message = Data([kind])
         message.append(content)
         guard let payload = try? AES.GCM.seal(message, using: key, authenticating: self.message("mac-frame")).combined
         else { close(); return }
         var size = UInt32(payload.count).bigEndian
-        write(withUnsafeBytes(of: &size) { Data($0) } + payload)
+        write(withUnsafeBytes(of: &size) { Data($0) } + payload, finish: finish)
     }
 
     private func readFrame() {
         read(4) { [weak self] header in
             guard let self else { return }
             let length = header.reduce(0) { ($0 << 8) | Int($1) }
-            guard length > 28, length <= Self.maxCaptureFrame else { self.close(); return }
+            let limit = self.bluetooth ? QuestionLink.byteLimit + 285 : Self.maxCaptureFrame
+            guard length > 28, length <= limit else { self.close(); return }
             self.read(length) { [weak self] payload in
                 guard let self else { return }
                 guard let box = try? AES.GCM.SealedBox(combined: payload),
@@ -261,7 +301,19 @@ private final class QuestionPeer {
             awaiting = nil
             deadline?.cancel()
             finish(content.first == 1)
+        case 5 where bluetooth:
+            if !content.isEmpty { close() }
+        case 7 where bluetooth:
+            guard content.isEmpty, !switchingToNetwork else { close(); return }
+            switchingToNetwork = awaiting == nil && !receivingCapture
+            if switchingToNetwork {
+                acceptsQuestions = false
+                availabilityChanged?()
+                timeOut()
+            }
+            writeFrame(8, Data([switchingToNetwork ? 1 : 0]))
         case 6:
+            guard !switchingToNetwork else { return }
             guard content.count == 1 else { close(); return }
             let available = content.first == 1
             if acceptsQuestions != available {
@@ -293,8 +345,13 @@ private final class QuestionPeer {
         heartbeat?.cancel()
         heartbeat = nil
         deadline?.cancel()
-        connection.stateUpdateHandler = nil
-        connection.cancel()
+        switch transport {
+        case .network(let connection):
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+        case .bluetooth(let stream):
+            DispatchQueue.main.async { stream.stop() }
+        }
         awaiting?(false)
         awaiting = nil
         notice?(false)
@@ -313,17 +370,34 @@ private final class QuestionPeer {
         queue.asyncAfter(deadline: .now() + 7, execute: task)
     }
 
-    private func write(_ data: Data) {
-        connection.send(content: data, completion: .contentProcessed { [weak self] error in
-            if error != nil { self?.close() }
-        })
+    private func write(_ data: Data, finish: @escaping () -> Void = {}) {
+        switch transport {
+        case .network(let connection):
+            connection.send(content: data, completion: .contentProcessed { [weak self] error in
+                if error != nil { self?.close() }
+                else { finish() }
+            })
+        case .bluetooth(let stream):
+            DispatchQueue.main.async { stream.write(data) { self.queue.async { finish() } } }
+        }
     }
 
     private func read(_ count: Int, _ received: @escaping (Data) -> Void) {
-        connection.receive(minimumIncompleteLength: count, maximumLength: count) { [weak self] data, _, _, error in
-            guard let self, !self.closed else { return }
-            if let data, data.count == count, error == nil { received(data) }
-            else { self.close() }
+        switch transport {
+        case .network(let connection):
+            connection.receive(minimumIncompleteLength: count, maximumLength: count) { [weak self] data, _, _, error in
+                guard let self, !self.closed else { return }
+                if let data, data.count == count, error == nil { received(data) }
+                else { self.close() }
+            }
+        case .bluetooth(let stream):
+            DispatchQueue.main.async { [weak self] in
+                stream.read(count) { [weak self] data in
+                    self?.queue.async { [weak self] in
+                        if self?.closed == false { received(data) }
+                    }
+                }
+            }
         }
     }
 }

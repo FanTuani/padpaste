@@ -16,6 +16,7 @@ import java.util.*;
 
 public final class SyncService extends Service {
     static final String STOP="io.github.fantuani.padpaste.STOP";
+    private static final String BLUETOOTH_CHANGED = "io.github.fantuani.padpaste.BLUETOOTH_CHANGED";
     static final String RECONFIGURE="io.github.fantuani.padpaste.RECONFIGURE";
     static final int NOTIFICATION=21;
     public static final String STATE_ACTION = SyncState.ACTION;
@@ -57,6 +58,12 @@ public final class SyncService extends Service {
         }
     }
 
+    public static void refreshBluetoothForegroundType(Context context) {
+        if (Build.VERSION.SDK_INT >= 34 && SyncState.running) {
+            context.startService(new Intent(context, SyncService.class).setAction(BLUETOOTH_CHANGED));
+        }
+    }
+
     private static boolean configured(Context context) {
         return DuplexSync.get(context).paired() || new Config(context).valid();
     }
@@ -68,8 +75,7 @@ public final class SyncService extends Service {
         super.onCreate();
         NotificationChannel channel=new NotificationChannel("sync","截图同步",NotificationManager.IMPORTANCE_LOW);
         channel.setDescription("显示截图监控是否正在运行");getSystemService(NotificationManager.class).createNotificationChannel(channel);
-        Notification n=notification("正在恢复截图监控…");
-        if(Build.VERSION.SDK_INT>=34)startForeground(NOTIFICATION,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);else startForeground(NOTIFICATION,n);
+        promoteForeground("正在恢复截图监控…");
         thread=new HandlerThread("PadPasteTransfer");thread.start();worker=new Handler(thread.getLooper());
         connectivity=getSystemService(ConnectivityManager.class);
         networkCallback=new ConnectivityManager.NetworkCallback(){
@@ -83,6 +89,9 @@ public final class SyncService extends Service {
         if(!Config.prefs(this).getBoolean("enabled",false)){stopSelf();return START_NOT_STICKY;}
         if(!filesAllowed(this)||!configured(this)){
             SyncState.phase=!filesAllowed(this)?"需要文件访问权限":"需要配置配对信息";SyncState.publish(this);stopSelf();return START_NOT_STICKY;
+        }
+        if (intent != null && BLUETOOTH_CHANGED.equals(intent.getAction())) {
+            promoteForeground("仅剪贴板 · 传输后清理平板截图");
         }
         DuplexSync.get(this).monitor(true);
         boolean reload=intent!=null&&RECONFIGURE.equals(intent.getAction());
@@ -207,6 +216,19 @@ public final class SyncService extends Service {
         PendingIntent open=PendingIntent.getActivity(this,0,openApp,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop=PendingIntent.getService(this,1,new Intent(this,SyncService.class).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this,"sync").setSmallIcon(getApplicationInfo().icon).setContentTitle("PadPaste").setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(new Notification.Action.Builder(null,"暂停",stop).build()).build();
+    }
+    private void promoteForeground(String text) {
+        Notification notification = notification(text);
+        if (Build.VERSION.SDK_INT < 34) {
+            startForeground(NOTIFICATION, notification);
+            return;
+        }
+        int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+        DuplexSync link = DuplexSync.get(this);
+        if (link.bluetoothEnabled() && link.bluetoothAllowed()) {
+            type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+        }
+        startForeground(NOTIFICATION, notification, type);
     }
     private void updateNotification(String text){getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(text));}
     @Override public void onDestroy(){

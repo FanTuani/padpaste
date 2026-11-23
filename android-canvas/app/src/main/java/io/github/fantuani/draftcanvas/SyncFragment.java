@@ -3,6 +3,7 @@ package io.github.fantuani.draftcanvas;
 import android.Manifest;
 import android.app.Activity;
 import android.app.Fragment;
+import android.bluetooth.BluetoothAdapter;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -40,6 +41,7 @@ import java.nio.charset.StandardCharsets;
 public final class SyncFragment extends Fragment {
     private static final int PICK_PAIRING = 630;
     private static final int STORAGE_PERMISSION = 103;
+    private static final int BLUETOOTH_PERMISSION = 104;
     private static final int INK = 0xFF243137;
     private static final int MUTED = 0xFF596663;
     private static final int TEAL = 0xFF167B70;
@@ -48,7 +50,8 @@ public final class SyncFragment extends Fragment {
     private DuplexSync link;
     private SharedPreferences preferences;
     private TextView connection, address, receiveStatus, sendStatus;
-    private Switch receive, send;
+    private Switch receive, send, bluetooth;
+    private TextView bluetoothStatus;
     private Button reconnect, grant;
     private LinearLayout pairing;
     private EditText pairingCode;
@@ -108,6 +111,20 @@ public final class SyncFragment extends Fragment {
         LinearLayout configuration = card(content);
         configuration.addView(label("连接配置", 16, INK));
         configuration.addView(label("从 Mac 的 PadPaste 菜单获取同步配对码或配对文件。", 14, MUTED));
+        if (Build.VERSION.SDK_INT >= 31) {
+            bluetoothStatus = label("", 13, MUTED);
+            bluetooth = direction(configuration, "蓝牙备用", bluetoothStatus);
+            bluetooth.setOnCheckedChangeListener((view, enabled) -> {
+                if (updating) return;
+                if (enabled && !link.bluetoothAllowed()) {
+                    render();
+                    requestPermissions(new String[]{Manifest.permission.BLUETOOTH_SCAN,
+                            Manifest.permission.BLUETOOTH_CONNECT}, BLUETOOTH_PERMISSION);
+                    return;
+                }
+                setBluetoothEnabled(enabled);
+            });
+        }
         LinearLayout controls = new LinearLayout(activity);
         configuration.addView(controls);
         Button edit = button("输入配对码", this::togglePairing);
@@ -139,6 +156,9 @@ public final class SyncFragment extends Fragment {
         IntentFilter filter = new IntentFilter(SyncService.STATE_ACTION);
         if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(changes, filter, Context.RECEIVER_NOT_EXPORTED);
         else activity.registerReceiver(changes, filter);
+        IntentFilter bluetoothState = new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED);
+        if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(changes, bluetoothState, Context.RECEIVER_EXPORTED);
+        else activity.registerReceiver(changes, bluetoothState);
         render();
     }
 
@@ -163,10 +183,21 @@ public final class SyncFragment extends Fragment {
         updating = true;
         receive.setChecked(receiving);
         send.setChecked(sending);
+        if (bluetooth != null) {
+            bluetooth.setChecked(link.bluetoothEnabled() && link.bluetoothAllowed());
+        }
         updating = false;
 
+        if (bluetoothStatus != null) {
+            bluetoothStatus.setText(link.connectedViaBluetooth() ? "正在使用蓝牙"
+                    : !link.bluetoothEnabled() ? "Wi-Fi 不可用时接管，需要在 Mac 上一并开启"
+                    : !link.bluetoothAllowed() ? "需要附近设备权限"
+                    : !link.bluetoothRadioOn() ? "蓝牙已关闭" : "Wi-Fi 优先 · 蓝牙已待命");
+        }
+
         connection.setText(!paired ? "尚未配对" : paused ? "同步已暂停"
-                : connected ? (link.duplex() ? "已连接 Mac" : "已连接 · 旧版 Mac") : "等待 Mac 连接");
+                : connected ? (link.connectedViaBluetooth() ? "已连接 Mac · 蓝牙"
+                    : link.duplex() ? "已连接 Mac · Wi-Fi" : "已连接 · 旧版 Mac") : "等待 Mac 连接");
         connection.setTextColor(connected && !paused ? TEAL : INK);
         String endpoint = link.connectedAddress();
         address.setText(endpoint);
@@ -178,6 +209,12 @@ public final class SyncFragment extends Fragment {
                 : SyncService.monitorStatus());
         grant.setVisibility(sending && !allowed ? View.VISIBLE : View.GONE);
         reconnect.setEnabled(paired && (receiving || sending && allowed));
+    }
+
+    private void setBluetoothEnabled(boolean enabled) {
+        link.setBluetoothEnabled(enabled);
+        SyncService.refreshBluetoothForegroundType(activity);
+        render();
     }
 
     private void requestStorage() {
@@ -192,6 +229,10 @@ public final class SyncFragment extends Fragment {
 
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
+        if (request == BLUETOOTH_PERMISSION) {
+            if (link.bluetoothAllowed()) setBluetoothEnabled(true);
+            else render();
+        }
         if (request == STORAGE_PERMISSION) {
             SyncService.resumeMonitoring(activity);
             render();

@@ -54,6 +54,8 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
     private var questions: QuestionLink?
     private var statusItem: NSStatusItem?
     private var questionStatus: NSMenuItem?
+    private var bluetoothStatus: NSMenuItem?
+    private var bluetoothEnabled = UserDefaults.standard.bool(forKey: "bluetoothFallback")
     private var feedback: NSPanel?
     private var lastClipboardChange = 0
     private var questionConnected = false
@@ -88,11 +90,13 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
             let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkClipboard() }
             RunLoop.main.add(timer, forMode: .common)
             clipboardTimer = timer
-            link.statusChanged = { [weak self] connected in
-                self?.questionConnected = connected
-                self?.questionStatus?.title = connected ? "草稿纸已连接" : "等待草稿纸连接"
+            link.statusChanged = { [weak self] receiving, route in
+                self?.questionConnected = receiving
+                self?.questionStatus?.title = route.map { "草稿纸已连接 · " + $0 } ?? "等待草稿纸连接"
             }
+            link.bluetoothStatus = { [weak self] status in self?.bluetoothStatus?.title = status }
             link.start()
+            link.setBluetoothEnabled(bluetoothEnabled)
         } catch {
             NSLog("PadPaste questions: %@", error.localizedDescription)
         }
@@ -108,6 +112,10 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let status = menu.addItem(withTitle: "等待草稿纸连接", action: nil, keyEquivalent: "")
         questionStatus = status
+        let bluetooth = menu.addItem(withTitle: "蓝牙备用 · 已关闭", action: #selector(toggleBluetooth), keyEquivalent: "")
+        bluetooth.target = self
+        bluetooth.state = bluetoothEnabled ? .on : .off
+        bluetoothStatus = bluetooth
         let clipboard = menu.addItem(withTitle: "监听剪贴板图片", action: #selector(toggleClipboard), keyEquivalent: "")
         clipboard.target = self
         clipboard.state = watchClipboard ? .on : .off
@@ -115,6 +123,13 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "导出同步配对文件…", action: #selector(saveQuestionPairing), keyEquivalent: "").target = self
         item.menu = menu
         statusItem = item
+    }
+
+    @objc private func toggleBluetooth(_ item: NSMenuItem) {
+        bluetoothEnabled.toggle()
+        item.state = bluetoothEnabled ? .on : .off
+        UserDefaults.standard.set(bluetoothEnabled, forKey: "bluetoothFallback")
+        questions?.setBluetoothEnabled(bluetoothEnabled)
     }
 
     @objc private func copyQuestionPairing() {
