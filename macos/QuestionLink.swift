@@ -164,6 +164,10 @@ private final class QuestionPeer {
     private let queue: DispatchQueue
     private static let version = Data("PADSYNC2".utf8)
     private static let transferFeature = Data("XFERLOCK".utf8)
+    private static let liveFeature = Data("XFERLIVE".utf8)
+    private static let captureProgress: UInt8 = 13
+    private static let captureReady: UInt8 = 14
+    private static let captureCommit: UInt8 = 15
     private static let questionStart: UInt8 = 9
     private static let questionPermission: UInt8 = 10
     private static let captureStart: UInt8 = 11
@@ -172,11 +176,16 @@ private final class QuestionPeer {
     private var context = Data()
     private var duplex = false
     private var transferLock = false
+    private var liveProgress = false
     private var heartbeat: DispatchSourceTimer?
     private var availabilityChanged: (() -> Void)?
     private var receiveScreenshot: ((String, Data, @escaping (Bool) -> Void) -> Void)?
     private var receivingCapture = false
     private var captureAnnounced = false
+    private var captureLength = 0
+    private var capturePayload = Data()
+    private var lastProgressReport: TimeInterval = 0
+    private var commitCapture: (() -> Void)?
     private var pendingQuestion: Data?
     private var switchingToNetwork = false
     private(set) var acceptsQuestions = false
@@ -219,7 +228,12 @@ private final class QuestionPeer {
                 serverNonce.replaceSubrange(..<Self.version.count, with: Self.version)
                 let capability = Self.version.count..<(Self.version.count + Self.transferFeature.count)
                 self.transferLock = clientNonce[capability] == Self.transferFeature
-                if self.transferLock { serverNonce.replaceSubrange(capability, with: Self.transferFeature) }
+                if self.transferLock {
+                    serverNonce.replaceSubrange(capability, with: Self.transferFeature)
+                    let progress = capability.upperBound..<(capability.upperBound + Self.liveFeature.count)
+                    self.liveProgress = clientNonce[progress] == Self.liveFeature
+                    if self.liveProgress { serverNonce.replaceSubrange(progress, with: Self.liveFeature) }
+                }
             }
             self.context = clientNonce + serverNonce
             self.write(serverNonce + self.proof("server"))
@@ -308,15 +322,43 @@ private final class QuestionPeer {
             let length = header.reduce(0) { ($0 << 8) | Int($1) }
             let limit = self.bluetooth ? QuestionLink.byteLimit + 285 : Self.maxCaptureFrame
             guard length > 28, length <= limit else { self.close(); return }
-            self.read(length) { [weak self] payload in
-                guard let self else { return }
-                guard let box = try? AES.GCM.SealedBox(combined: payload),
-                      let frame = try? AES.GCM.open(box, using: self.key, authenticating: self.message("tablet-frame")),
-                      let kind = frame.first else { self.close(); return }
-                self.handleFrame(kind, frame.dropFirst())
-                if !self.closed { self.readFrame() }
+            if self.liveProgress && self.captureAnnounced && length == self.captureLength {
+                self.capturePayload = Data(capacity: length)
+                self.lastProgressReport = 0
+                self.readCapture(length)
+            } else {
+                self.read(length) { [weak self] payload in self?.receiveFrame(payload) }
             }
         }
+    }
+
+    private func readCapture(_ length: Int) {
+        let chunk = bluetooth ? 8192 : 65536
+        read(min(chunk, length - capturePayload.count)) { [weak self] data in
+            guard let self else { return }
+            self.capturePayload.append(data)
+            if self.capturePayload.count == length {
+                let payload = self.capturePayload
+                self.capturePayload = Data()
+                self.receiveFrame(payload)
+                return
+            }
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - self.lastProgressReport >= 0.16 {
+                self.lastProgressReport = now
+                var confirmed = UInt32(self.capturePayload.count).bigEndian
+                self.writeFrame(Self.captureProgress, withUnsafeBytes(of: &confirmed) { Data($0) })
+            }
+            self.readCapture(length)
+        }
+    }
+
+    private func receiveFrame(_ payload: Data) {
+        guard let box = try? AES.GCM.SealedBox(combined: payload),
+              let frame = try? AES.GCM.open(box, using: key, authenticating: message("tablet-frame")),
+              let kind = frame.first else { close(); return }
+        handleFrame(kind, frame.dropFirst())
+        if !closed { readFrame() }
     }
 
     private func handleFrame(_ kind: UInt8, _ content: Data) {
@@ -331,33 +373,25 @@ private final class QuestionPeer {
                 finishQuestion(false)
             }
         case Self.captureStart:
-            guard transferLock, content.isEmpty, !captureAnnounced, !receivingCapture,
+            guard transferLock, content.count == (liveProgress ? 4 : 0),
+                  !captureAnnounced, !receivingCapture,
                   awaiting == nil || pendingQuestion != nil else { close(); return }
+            if liveProgress {
+                let length = content.reduce(0) { ($0 << 8) | Int($1) }
+                let limit = bluetooth ? QuestionLink.byteLimit + 285 : Self.maxCaptureFrame
+                guard length >= 32, length <= limit else { close(); return }
+                captureLength = length
+            }
             captureAnnounced = true
             // A refusal queued behind this upload can arrive after the usual handshake deadline.
             if pendingQuestion != nil { deadline?.cancel() }
         case 2:
-            guard !transferLock || captureAnnounced else { close(); return }
-            guard !receivingCapture, let count = content.first, count > 0,
-                  content.count > 1 + Int(count), content.count - 1 - Int(count) <= 50 * 1024 * 1024,
-                  let filename = String(data: content.dropFirst().prefix(Int(count)), encoding: .utf8),
-                  let receiveScreenshot else {
-                captureAnnounced = false
-                writeFrame(4, Data([0]))
-                if pendingQuestion != nil { timeOut() }
-                return
-            }
-            receivingCapture = true
-            receiveScreenshot(filename, content.dropFirst(1 + Int(count))) { [weak self] ok in
-                guard let self else { return }
-                self.queue.async {
-                    guard !self.closed else { return }
-                    self.receivingCapture = false
-                    self.captureAnnounced = false
-                    self.writeFrame(4, Data([ok ? 1 : 0]))
-                    if self.pendingQuestion != nil { self.timeOut() }
-                }
-            }
+            stageCapture(content)
+        case Self.captureCommit:
+            guard liveProgress, content.isEmpty, let commit = commitCapture else { close(); return }
+            commitCapture = nil
+            deadline?.cancel()
+            commit()
         case 3:
             guard content.count == 1, pendingQuestion == nil else { close(); return }
             finishQuestion(content.first == 1)
@@ -383,6 +417,38 @@ private final class QuestionPeer {
         default:
             close()
         }
+    }
+
+    private func stageCapture(_ content: Data) {
+        guard (!transferLock || captureAnnounced), !receivingCapture,
+              (!liveProgress || content.count + 29 == captureLength) else { close(); return }
+        guard let count = content.first, count > 0,
+              content.count > 1 + Int(count), content.count - 1 - Int(count) <= 50 * 1024 * 1024,
+              let filename = String(data: content.dropFirst().prefix(Int(count)), encoding: .utf8),
+              let receiveScreenshot else { finishCapture(false); return }
+        receivingCapture = true
+        let body = content.dropFirst(1 + Int(count))
+        let commit = { [weak self] in
+            receiveScreenshot(filename, body) { [weak self] ok in
+                guard let self else { return }
+                self.queue.async { if !self.closed { self.finishCapture(ok) } }
+            }
+        }
+        if liveProgress {
+            commitCapture = commit
+            writeFrame(Self.captureReady)
+            timeOut(seconds: bluetooth ? 24 : 12)
+        } else {
+            commit()
+        }
+    }
+
+    private func finishCapture(_ accepted: Bool) {
+        receivingCapture = false
+        captureAnnounced = false
+        captureLength = 0
+        writeFrame(4, Data([accepted ? 1 : 0]))
+        if pendingQuestion != nil { timeOut() }
     }
 
     private func readAcknowledgement() {
@@ -415,6 +481,8 @@ private final class QuestionPeer {
         awaiting?(false)
         awaiting = nil
         pendingQuestion = nil
+        commitCapture = nil
+        capturePayload = Data()
         notice?(false)
         notice = nil
     }
@@ -424,11 +492,11 @@ private final class QuestionPeer {
         Data(HMAC<SHA256>.authenticationCode(for: message(purpose), using: key))
     }
 
-    private func timeOut() {
+    private func timeOut(seconds: Double = 7) {
         deadline?.cancel()
         let task = DispatchWorkItem { [weak self] in self?.close() }
         deadline = task
-        queue.asyncAfter(deadline: .now() + 7, execute: task)
+        queue.asyncAfter(deadline: .now() + seconds, execute: task)
     }
 
     private func write(_ data: Data, finish: @escaping () -> Void = {}) {

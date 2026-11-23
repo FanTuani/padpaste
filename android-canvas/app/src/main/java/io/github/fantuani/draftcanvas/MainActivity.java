@@ -53,9 +53,9 @@ public final class MainActivity extends Activity {
         syncPage.setId(R.id.sync_page);
         root.addView(syncPage, new FrameLayout.LayoutParams(-1, -1));
         transferIndicator = new TransferIndicator(this);
-        FrameLayout.LayoutParams indicator = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.START);
-        indicator.topMargin = dp(12);
-        indicator.setMarginStart(dp(12));
+        FrameLayout.LayoutParams indicator = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.START);
+        indicator.topMargin = dp(4);
+        indicator.setMarginStart(dp(4));
         root.addView(transferIndicator, indicator);
         setContentView(root);
         getFragmentManager().addOnBackStackChangedListener(this::updatePageVisibility);

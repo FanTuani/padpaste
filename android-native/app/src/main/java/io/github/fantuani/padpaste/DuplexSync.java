@@ -24,6 +24,7 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
@@ -35,6 +36,8 @@ public final class DuplexSync {
     private static final int QUESTION = 1, CAPTURE = 2, QUESTION_ACK = 3, CAPTURE_ACK = 4, HEARTBEAT = 5, AVAILABILITY = 6;
     private static final int NETWORK_READY = 7, NETWORK_REPLY = 8;
     private static final int QUESTION_START = 9, QUESTION_PERMISSION = 10, CAPTURE_START = 11, TRANSFER_CONFLICT = 12;
+    private static final int CAPTURE_PROGRESS = 13, CAPTURE_READY = 14, CAPTURE_COMMIT = 15;
+    private static final byte[] LIVE_FEATURE = "XFERLIVE".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] TRANSFER_FEATURE = "XFERLOCK".getBytes(StandardCharsets.US_ASCII);
     private static final long BLUETOOTH_IDLE_MS = 24_000;
     private static final byte[] VERSION = "PADSYNC2".getBytes(StandardCharsets.US_ASCII);
@@ -45,7 +48,7 @@ public final class DuplexSync {
     public interface Listener {
         void status(boolean connected);
         // The image is validated on the reader thread before acknowledging it.
-        boolean image(byte[] data);
+        boolean image(byte[] data, BooleanSupplier accept);
     }
 
     public static final class TransferProgress {
@@ -54,6 +57,9 @@ public final class DuplexSync {
         private volatile int transferred;
         private volatile boolean finished;
         private volatile boolean successful;
+        private volatile boolean cancelled;
+        private volatile boolean committing;
+        private volatile long activity = SystemClock.elapsedRealtime();
 
         private TransferProgress(boolean uploading, int total) {
             this.uploading = uploading;
@@ -61,14 +67,21 @@ public final class DuplexSync {
         }
 
         public boolean finished() { return finished; }
+        public boolean cancelled() { return cancelled; }
+        public boolean canCancel() { return !finished && !committing; }
+
         public float fraction() {
-            return successful ? 1f : Math.min(.98f, (float) transferred / total);
+            return successful ? 1f : Math.min(.94f, (float) transferred / total * .94f);
         }
 
         private void finish(boolean success) {
             successful = success;
             finished = true;
         }
+    }
+
+    static final class TransferCancelled extends IOException {
+        TransferCancelled() { super("传输已取消"); }
     }
 
     static final class TransferConflict extends IOException {
@@ -133,10 +146,17 @@ public final class DuplexSync {
         });
     }
 
-    private void showUploadConflict() {
+    public boolean cancelTransfer(TransferProgress progress) {
+        Client current = client;
+        if (current == null || !current.cancelTransfer(progress)) return false;
+        showTransferMessage("传输已取消");
+        return true;
+    }
+
+    private void showTransferMessage(String text) {
         main.post(() -> {
             if (conflictToast != null) conflictToast.cancel();
-            conflictToast = Toast.makeText(context, "正在上传截图，本次题图未接收", Toast.LENGTH_SHORT);
+            conflictToast = Toast.makeText(context, text, Toast.LENGTH_SHORT);
             conflictToast.show();
         });
     }
@@ -513,13 +533,15 @@ public final class DuplexSync {
                 case QUESTION_START -> requestQuestion(link, frame);
                 case TRANSFER_CONFLICT -> {
                     if (!link.transferLock || frame.length != 1) throw new IOException("无效的传输状态");
-                    showUploadConflict();
+                    showTransferMessage("正在上传截图，本次题图未接收");
                 }
+                case CAPTURE_PROGRESS -> updateCaptureProgress(link, frame);
+                case CAPTURE_READY -> commitCapture(link, frame);
                 case CAPTURE_ACK -> {
                     if (frame.length != 2) throw new IOException("无效同步回执");
                     synchronized (routing) {
                         boolean ok = frame[1] == 1;
-                        if (upload != null) upload.finish(ok);
+                        if (upload != null && !upload.cancelled) upload.finish(ok);
                         upload = null;
                         CompletableFuture<Boolean> pending = receipt.getAndSet(null);
                         if (pending != null) pending.complete(ok);
@@ -543,6 +565,46 @@ public final class DuplexSync {
             }
         }
 
+        private void updateCaptureProgress(Session link, byte[] frame) throws IOException {
+            if (!link.liveProgress || frame.length != 5) throw new IOException("无效的上传进度");
+            int transferred = ByteBuffer.wrap(frame, 1, 4).getInt();
+            synchronized (routing) {
+                TransferProgress current = upload;
+                if (current == null || current.cancelled || current.committing) return;
+                if (transferred < 0 || transferred > current.total) throw new IOException("无效的上传进度");
+                if (transferred > current.transferred) {
+                    current.transferred = transferred;
+                    current.activity = SystemClock.elapsedRealtime();
+                }
+            }
+        }
+
+        private void commitCapture(Session link, byte[] frame) throws Exception {
+            if (!link.liveProgress || frame.length != 1) throw new IOException("无效的上传确认");
+            synchronized (routing) {
+                TransferProgress current = upload;
+                if (current == null || current.cancelled || current.committing) return;
+                current.transferred = current.total;
+                current.activity = SystemClock.elapsedRealtime();
+                current.committing = true;
+            }
+            link.send(CAPTURE_COMMIT, new byte[0]);
+        }
+
+        private boolean cancelTransfer(TransferProgress progress) {
+            Session current;
+            synchronized (routing) {
+                if (progress == null || (progress != upload && progress != download) || !progress.canCancel()) return false;
+                current = session;
+                if (current == null) return false;
+                progress.cancelled = true;
+                progress.finish(false);
+            }
+            // Closing a partially written frame is the only way to stop it without draining it.
+            maintenance.execute(() -> close(current.transport));
+            return true;
+        }
+
         private void requestQuestion(Session link, byte[] frame) throws Exception {
             if (!link.transferLock || frame.length != 5) throw new IOException("无效的题图请求");
             int size = ByteBuffer.wrap(frame, 1, 4).getInt();
@@ -558,7 +620,7 @@ public final class DuplexSync {
                     startProgress(download);
                 }
             }
-            if (busy) showUploadConflict();
+            if (busy) showTransferMessage("正在上传截图，本次题图未接收");
             final byte[] reply = {(byte) (granted ? 1 : 0)};
             // A refusal must not block the reader while the writer is sending a screenshot.
             if (granted) {
@@ -576,19 +638,32 @@ public final class DuplexSync {
             if (link.transferLock && (download == null || frame.length + 28 != questionLength)) {
                 throw new IOException("题图未获传输许可");
             }
-            boolean accepted = deliver(Arrays.copyOfRange(frame, 1, frame.length));
+            TransferProgress current = download;
+            boolean accepted = deliver(Arrays.copyOfRange(frame, 1, frame.length), () -> {
+                synchronized (routing) {
+                    if (current == null) return !stopped;
+                    if (current.cancelled || session != link) return false;
+                    current.committing = true;
+                    return true;
+                }
+            });
             // Publish the acknowledgement on the wire before any newly reserved upload can write.
             synchronized (routing) {
+                if (current != null && current.cancelled) return;
                 link.send(QUESTION_ACK, new byte[]{(byte) (accepted ? 1 : 0)});
-                if (download != null) download.finish(accepted);
+                if (current != null) current.finish(accepted);
                 download = null;
                 questionLength = 0;
             }
         }
 
         private boolean deliver(byte[] data) {
+            return deliver(data, () -> !stopped);
+        }
+
+        private boolean deliver(byte[] data, BooleanSupplier accept) {
             Listener current = listener;
-            return !stopped && current != null && current.image(data);
+            return !stopped && current != null && current.image(data, accept);
         }
 
         private void availability() {
@@ -617,12 +692,16 @@ public final class DuplexSync {
             if (link.bluetooth) link.lastWrite = SystemClock.elapsedRealtime();
             writer.execute(() -> {
                 try {
-                    if (session != link || receipt.get() != pending) return;
+                    if (session != link || progress.cancelled || receipt.get() != pending) return;
                     byte[] header = new byte[2 + filename.length];
                     header[0] = CAPTURE;
                     header[1] = (byte) filename.length;
                     System.arraycopy(filename, 0, header, 2, filename.length);
-                    if (link.transferLock) link.send(CAPTURE_START, new byte[0]);
+                    if (link.transferLock) {
+                        byte[] announcement = link.liveProgress
+                                ? ByteBuffer.allocate(4).putInt(progress.total).array() : new byte[0];
+                        link.send(CAPTURE_START, announcement);
+                    }
                     link.sendParts(header, data, progress);
                 } catch (Exception failure) {
                     android.util.Log.w("PadPasteSync", "Screenshot send failed: " + failure.getClass().getSimpleName());
@@ -631,7 +710,9 @@ public final class DuplexSync {
                 }
             });
             try {
-                if (!(link.bluetooth ? waitForBluetoothReceipt(link, pending) : pending.get(9, TimeUnit.SECONDS))) {
+                if (!(link.liveProgress || link.bluetooth ? waitForReceipt(link, pending, progress)
+                        : pending.get(9, TimeUnit.SECONDS))) {
+                    if (progress.cancelled) throw new TransferCancelled();
                     throw new IOException("Mac 未接收截图");
                 }
             } catch (InterruptedException interrupted) {
@@ -640,6 +721,9 @@ public final class DuplexSync {
                 throw new IOException("同步已中断", interrupted);
             } catch (TimeoutException | ExecutionException failure) {
                 close(link.transport);
+                if (progress.cancelled) throw new TransferCancelled();
+                android.util.Log.w("PadPasteSync", "Upload stalled: receiver confirmed "
+                        + progress.transferred + "/" + progress.total + " bytes, commit=" + progress.committing);
                 throw new IOException("Mac 未确认截图", failure);
             } finally {
                 synchronized (routing) {
@@ -651,12 +735,14 @@ public final class DuplexSync {
                 }
             }
         }
-        private boolean waitForBluetoothReceipt(Session link, CompletableFuture<Boolean> pending)
+        private boolean waitForReceipt(Session link, CompletableFuture<Boolean> pending, TransferProgress progress)
                 throws InterruptedException, ExecutionException, TimeoutException {
+            long idle = link.bluetooth ? 35_000 : 12_000;
             while (true) {
-                try { return pending.get(4, TimeUnit.SECONDS); }
+                try { return pending.get(2, TimeUnit.SECONDS); }
                 catch (TimeoutException timeout) {
-                    if (SystemClock.elapsedRealtime() - link.lastWrite >= BLUETOOTH_IDLE_MS) throw timeout;
+                    long activity = link.liveProgress ? progress.activity : link.lastWrite;
+                    if (progress.cancelled || SystemClock.elapsedRealtime() - activity >= idle) throw timeout;
                 }
             }
         }
@@ -667,6 +753,7 @@ public final class DuplexSync {
         private final DataOutputStream output;
         private final boolean bluetooth;
         private boolean transferLock;
+        private boolean liveProgress;
         volatile boolean writing;
         volatile long lastRead = SystemClock.elapsedRealtime(), lastWrite = lastRead;
         long lastProbe;
@@ -704,6 +791,7 @@ public final class DuplexSync {
             RANDOM.nextBytes(nonce);
             System.arraycopy(VERSION, 0, nonce, 0, VERSION.length);
             System.arraycopy(TRANSFER_FEATURE, 0, nonce, VERSION.length, TRANSFER_FEATURE.length);
+            System.arraycopy(LIVE_FEATURE, 0, nonce, VERSION.length + TRANSFER_FEATURE.length, LIVE_FEATURE.length);
             System.arraycopy(nonce, 0, context, 0, nonce.length);
             output.write(nonce);
             input.readFully(context, 32, 32);
@@ -714,6 +802,9 @@ public final class DuplexSync {
             int capability = 32 + VERSION.length;
             transferLock = duplex && Arrays.equals(TRANSFER_FEATURE,
                     Arrays.copyOfRange(context, capability, capability + TRANSFER_FEATURE.length));
+            int live = capability + TRANSFER_FEATURE.length;
+            liveProgress = transferLock && Arrays.equals(LIVE_FEATURE,
+                    Arrays.copyOfRange(context, live, live + LIVE_FEATURE.length));
             return duplex;
         }
 
@@ -743,7 +834,10 @@ public final class DuplexSync {
                         output.write(sealed, offset, count);
                         offset += count;
                         if (bluetooth) lastWrite = SystemClock.elapsedRealtime();
-                        if (progress != null) progress.transferred = nonce.length + prefixSize + offset;
+                        if (progress != null) {
+                            if (progress.cancelled) throw new TransferCancelled();
+                            if (!liveProgress) progress.transferred = nonce.length + prefixSize + offset;
+                        }
                     }
                 } else {
                     output.write(sealed);

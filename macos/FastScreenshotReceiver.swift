@@ -104,6 +104,7 @@ final class FastScreenshotReceiver {
             self.queue.async {
                 if self.committed.count >= 1000 { self.committed.removeAll(keepingCapacity: true) }
                 self.committed.insert(name)
+                respond(200, "clipboard ready")
                 self.trace.append(["name": name, "bytes": body.count, "connectionMs": began,
                     "bodyDoneMs": bodyDone, "imageReadyMs": prepared, "clipboardMs": published,
                     "receiveMs": bodyDone - began, "decodeMs": prepared - bodyDone,
@@ -111,7 +112,6 @@ final class FastScreenshotReceiver {
                 self.trace = Array(self.trace.suffix(30))
                 let traceURL = AppConfiguration.dataDirectory.appendingPathComponent("latency-trace.json")
                 if let data = try? JSONSerialization.data(withJSONObject: self.trace, options: .sortedKeys) { try? data.write(to: traceURL, options: .atomic) }
-                respond(200, "clipboard ready")
             }
         }
     }

@@ -93,9 +93,13 @@ final class QuestionInbox implements DuplexSync.Listener {
 
     @Override public void status(boolean connected) {}
 
-    @Override public boolean image(byte[] data) {
+    @Override public boolean image(byte[] data, java.util.function.BooleanSupplier accept) {
         try {
             Bitmap bitmap = QuestionAssets.decode(data);
+            if (!accept.getAsBoolean()) {
+                bitmap.recycle();
+                return false;
+            }
             main.post(() -> {
                 if (!active || !preferences.getBoolean(RECEIVE_ENABLED, true)) return;
                 candidate = new Candidate(data, bitmap);

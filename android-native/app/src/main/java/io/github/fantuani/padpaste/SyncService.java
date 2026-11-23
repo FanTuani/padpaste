@@ -143,7 +143,7 @@ public final class SyncService extends Service {
         Capture capture=Collections.min(writing.values(),Comparator.comparingLong(c->c.next));
         long now=SystemClock.elapsedRealtime();if(capture.next>now){schedule(capture.next-now);return;}
         File file=new File(capture.path);if(!file.isFile())file=new File(config.directory,capture.name);
-        boolean uploaded=false,attempted=false,conflict=false;long duration=0;String error="";
+        boolean uploaded=false,attempted=false,conflict=false,cancelled=false;long duration=0;String error="";
         try{
             long size=file.length(),modified=file.lastModified();
             if(size>50L*1024*1024)throw new IOException("图片超过 50 MB");
@@ -162,7 +162,7 @@ public final class SyncService extends Service {
                 MacClient.upload(config, capture.name, data);
             }
             duration=SystemClock.elapsedRealtime()-started;uploaded=true;
-        }catch(Exception e){error=friendly(e);conflict=e instanceof DuplexSync.TransferConflict;}
+        }catch(Exception e){error=friendly(e);conflict=e instanceof DuplexSync.TransferConflict;cancelled=e instanceof DuplexSync.TransferCancelled;}
         // Every capture gets one network attempt. Success or failure both end in cleanup.
         boolean cleaned=cleanCapture(capture.name,capture.path);
         ledger.finish(capture.name,cleaned);writing.remove(capture.name);SyncState.phase="正在监控";
@@ -170,10 +170,12 @@ public final class SyncService extends Service {
             Config.prefs(this).edit().putLong("last_upload",System.currentTimeMillis()).putLong("last_duration",duration).putString("last_error",cleaned?"":"平板截图清理失败").apply();
             SyncState.connection(this,true,"");
             popup(cleaned?"已同步："+duration+"ms":"截图已同步，但平板截图清理失败");
+        }else if(cancelled&&cleaned){
+            // The indicator already showed the cancellation.
         }else if(conflict&&cleaned){
             popup(error);
         }else{
-            if(attempted&&!conflict)SyncState.connection(this,false,error);
+            if(attempted&&!conflict&&!cancelled)SyncState.connection(this,false,error);
             reportFailure(error,cleaned);
         }
         SyncState.publish(this);schedule(0);
