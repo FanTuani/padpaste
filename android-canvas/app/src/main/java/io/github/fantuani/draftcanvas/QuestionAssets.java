@@ -28,7 +28,7 @@ final class QuestionAssets {
     private static final int CACHE_BYTES = 40 * 1024 * 1024;
     private static final int PREVIEW_EDGE = 1024;
     private static final int TILE_EDGE = 384;
-    private static final int PREFETCH_PX = 64;
+    static final int PREFETCH_PX = 64;
     private static QuestionAssets instance;
     private final File directory;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -103,7 +103,7 @@ final class QuestionAssets {
     }
 
     void draw(String asset, Canvas canvas, RectF bounds, int displayEdge, int viewWidth, int viewHeight,
-              Paint paint, QuestionInk ink, Runnable ready) {
+              Paint paint, QuestionInk ink, boolean onScreen, Runnable ready) {
         Source source = sources.get(asset);
         if (source == null) {
             loadPreview(asset, displayEdge, ready);
@@ -116,8 +116,10 @@ final class QuestionAssets {
         for (int finer = divisor; finer >= 1; finer /= 2) {
             Bitmap bitmap = bitmaps.get(new Sample(asset, finer));
             if (bitmap != null) {
-                canvas.drawBitmap(bitmap, null, bounds, paint);
-                if (ink != null) ink.add(bitmap, bounds, 255);
+                if (onScreen) {
+                    canvas.drawBitmap(bitmap, null, bounds, paint);
+                    if (ink != null) ink.add(bitmap, bounds, 255);
+                }
                 return;
             }
         }
@@ -131,7 +133,7 @@ final class QuestionAssets {
             return;
         }
         if (divisor >= previewDivisor || fallback == null) loadPreview(asset, displayEdge, ready);
-        if (fallback != null) {
+        if (onScreen && fallback != null) {
             canvas.drawBitmap(fallback, null, bounds, paint);
             if (ink != null) ink.add(fallback, bounds, 255);
         }

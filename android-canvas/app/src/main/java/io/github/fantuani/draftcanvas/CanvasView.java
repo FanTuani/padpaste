@@ -399,7 +399,9 @@ public final class CanvasView extends View {
                 question = photoGesture.preview;
             }
             questionDisplayBounds(question);
-            if (!photoBounds.intersects(0, 0, getWidth(), getHeight())) continue;
+            int margin = QuestionAssets.PREFETCH_PX;
+            if (!photoBounds.intersects(-margin, -margin, getWidth() + margin, getHeight() + margin)) continue;
+            boolean onScreen = photoBounds.intersects(0, 0, getWidth(), getHeight());
             double edge = Math.max(question.width, question.height);
             // Keep the starting detail when shrinking and refine in the background when growing.
             if (resizingPhoto && question.id == photoGesture.original.id) {
@@ -409,7 +411,7 @@ public final class CanvasView extends View {
             }
             int displayEdge = Math.max(1, (int) Math.ceil(edge * ink.view.scale));
             questionAssets.draw(question.asset, canvas, photoBounds, displayEdge, getWidth(), getHeight(),
-                    photoPaint, collectForInk ? questionInk : null, redrawQuestions);
+                    photoPaint, collectForInk ? questionInk : null, onScreen, redrawQuestions);
         }
         if (questionOffer != null) {
             updateOfferBounds(questionOffer);

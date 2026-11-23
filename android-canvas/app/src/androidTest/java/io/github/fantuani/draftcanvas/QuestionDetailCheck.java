@@ -50,7 +50,7 @@ final class QuestionDetailCheck {
             do {
                 runner.runOnMainSync(() -> view.get().draw(target));
                 // Check the trailing image edge, both sides of a tile boundary, and the next photo.
-                if (stripesAt(frame, 188) && stripesAt(frame, 92) && stripesAt(frame, 430)) {
+                if (stripesAt(frame, 188) && stripesAt(frame, 92) && stripesAt(frame, 94) && stripesAt(frame, 430)) {
                     result.putString("stream", "PASS: both partially visible images retain source-pixel detail\n");
                     runner.finish(Activity.RESULT_OK, result);
                     return;
