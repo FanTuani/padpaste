@@ -163,13 +163,21 @@ private final class QuestionPeer {
     private let key: SymmetricKey
     private let queue: DispatchQueue
     private static let version = Data("PADSYNC2".utf8)
+    private static let transferFeature = Data("XFERLOCK".utf8)
+    private static let questionStart: UInt8 = 9
+    private static let questionPermission: UInt8 = 10
+    private static let captureStart: UInt8 = 11
+    private static let transferConflict: UInt8 = 12
     private static let maxCaptureFrame = 50 * 1024 * 1024 + 285
     private var context = Data()
     private var duplex = false
+    private var transferLock = false
     private var heartbeat: DispatchSourceTimer?
     private var availabilityChanged: (() -> Void)?
     private var receiveScreenshot: ((String, Data, @escaping (Bool) -> Void) -> Void)?
     private var receivingCapture = false
+    private var captureAnnounced = false
+    private var pendingQuestion: Data?
     private var switchingToNetwork = false
     private(set) var acceptsQuestions = false
     private var notice: ((Bool) -> Void)?
@@ -207,7 +215,12 @@ private final class QuestionPeer {
             guard let self else { return }
             self.duplex = clientNonce.starts(with: Self.version)
             var serverNonce = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-            if self.duplex { serverNonce.replaceSubrange(..<Self.version.count, with: Self.version) }
+            if self.duplex {
+                serverNonce.replaceSubrange(..<Self.version.count, with: Self.version)
+                let capability = Self.version.count..<(Self.version.count + Self.transferFeature.count)
+                self.transferLock = clientNonce[capability] == Self.transferFeature
+                if self.transferLock { serverNonce.replaceSubrange(capability, with: Self.transferFeature) }
+            }
             self.context = clientNonce + serverNonce
             self.write(serverNonce + self.proof("server"))
             self.read(32) { answer in
@@ -231,10 +244,19 @@ private final class QuestionPeer {
     func send(_ image: Data, finish: @escaping (Bool) -> Void) {
         guard !closed, !switchingToNetwork, awaiting == nil, image.count <= QuestionLink.byteLimit else { finish(false); return }
         if duplex {
+            if transferLock && (captureAnnounced || receivingCapture) {
+                writeFrame(Self.transferConflict)
+                finish(false)
+                return
+            }
             awaiting = finish
-            if !bluetooth { timeOut() }
-            writeFrame(1, image) { [weak self] in
-                if let self, self.bluetooth && self.awaiting != nil { self.timeOut() }
+            if transferLock {
+                pendingQuestion = image
+                var count = UInt32(image.count).bigEndian
+                timeOut()
+                writeFrame(Self.questionStart, withUnsafeBytes(of: &count) { Data($0) })
+            } else {
+                sendQuestion(image)
             }
             return
         }
@@ -245,6 +267,22 @@ private final class QuestionPeer {
         expectedAck = box.tag
         timeOut()
         write(withUnsafeBytes(of: &length) { Data($0) } + payload)
+    }
+
+    private func sendQuestion(_ image: Data) {
+        deadline?.cancel()
+        if !bluetooth { timeOut() }
+        writeFrame(1, image) { [weak self] in
+            if let self, self.bluetooth && self.awaiting != nil { self.timeOut() }
+        }
+    }
+
+    private func finishQuestion(_ accepted: Bool) {
+        guard let finish = awaiting else { close(); return }
+        pendingQuestion = nil
+        awaiting = nil
+        deadline?.cancel()
+        finish(accepted)
     }
 
     private func startHeartbeat() {
@@ -283,30 +321,51 @@ private final class QuestionPeer {
 
     private func handleFrame(_ kind: UInt8, _ content: Data) {
         switch kind {
+        case Self.questionPermission:
+            guard transferLock, let image = pendingQuestion, content.count == 1 else { close(); return }
+            if content.first == 1 {
+                guard !captureAnnounced && !receivingCapture else { close(); return }
+                pendingQuestion = nil
+                sendQuestion(image)
+            } else {
+                finishQuestion(false)
+            }
+        case Self.captureStart:
+            guard transferLock, content.isEmpty, !captureAnnounced, !receivingCapture,
+                  awaiting == nil || pendingQuestion != nil else { close(); return }
+            captureAnnounced = true
+            // A refusal queued behind this upload can arrive after the usual handshake deadline.
+            if pendingQuestion != nil { deadline?.cancel() }
         case 2:
+            guard !transferLock || captureAnnounced else { close(); return }
             guard !receivingCapture, let count = content.first, count > 0,
                   content.count > 1 + Int(count), content.count - 1 - Int(count) <= 50 * 1024 * 1024,
                   let filename = String(data: content.dropFirst().prefix(Int(count)), encoding: .utf8),
-                  let receiveScreenshot else { writeFrame(4, Data([0])); return }
+                  let receiveScreenshot else {
+                captureAnnounced = false
+                writeFrame(4, Data([0]))
+                if pendingQuestion != nil { timeOut() }
+                return
+            }
             receivingCapture = true
             receiveScreenshot(filename, content.dropFirst(1 + Int(count))) { [weak self] ok in
                 guard let self else { return }
                 self.queue.async {
                     guard !self.closed else { return }
                     self.receivingCapture = false
+                    self.captureAnnounced = false
                     self.writeFrame(4, Data([ok ? 1 : 0]))
+                    if self.pendingQuestion != nil { self.timeOut() }
                 }
             }
         case 3:
-            guard content.count == 1, let finish = awaiting else { close(); return }
-            awaiting = nil
-            deadline?.cancel()
-            finish(content.first == 1)
+            guard content.count == 1, pendingQuestion == nil else { close(); return }
+            finishQuestion(content.first == 1)
         case 5 where bluetooth:
             if !content.isEmpty { close() }
         case 7 where bluetooth:
             guard content.isEmpty, !switchingToNetwork else { close(); return }
-            switchingToNetwork = awaiting == nil && !receivingCapture
+            switchingToNetwork = awaiting == nil && !receivingCapture && !captureAnnounced
             if switchingToNetwork {
                 acceptsQuestions = false
                 availabilityChanged?()
@@ -355,6 +414,7 @@ private final class QuestionPeer {
         }
         awaiting?(false)
         awaiting = nil
+        pendingQuestion = nil
         notice?(false)
         notice = nil
     }

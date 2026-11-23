@@ -18,6 +18,7 @@ public final class MainActivity extends Activity {
     CanvasView canvas;
     private FrameLayout canvasPage;
     private FrameLayout syncPage;
+    private TransferIndicator transferIndicator;
     private DraftStore draftStore;
     private SharedPreferences toolSizes;
     private FanMenu menu;
@@ -51,6 +52,11 @@ public final class MainActivity extends Activity {
         syncPage = new FrameLayout(this);
         syncPage.setId(R.id.sync_page);
         root.addView(syncPage, new FrameLayout.LayoutParams(-1, -1));
+        transferIndicator = new TransferIndicator(this);
+        FrameLayout.LayoutParams indicator = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.START);
+        indicator.topMargin = dp(12);
+        indicator.setMarginStart(dp(12));
+        root.addView(transferIndicator, indicator);
         setContentView(root);
         getFragmentManager().addOnBackStackChangedListener(this::updatePageVisibility);
         updatePageVisibility();
@@ -296,11 +302,13 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        transferIndicator.start();
         resumed = true;
         if (questions != null) questions.start();
     }
 
     @Override protected void onPause() {
+        transferIndicator.stop();
         resumed = false;
         if (questions != null) questions.stop();
         if (canvas != null) canvas.settleForSave();
