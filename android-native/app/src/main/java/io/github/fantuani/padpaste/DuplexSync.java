@@ -4,6 +4,10 @@ import android.bluetooth.BluetoothSocket;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
+import android.net.Network;
+import android.net.NetworkRequest;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.content.SharedPreferences;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
@@ -24,6 +28,7 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
@@ -34,9 +39,11 @@ import javax.crypto.spec.SecretKeySpec;
 public final class DuplexSync {
     private static final int PORT = 5036, QUESTION_MAX = 6 * 1024 * 1024, CAPTURE_MAX = 50 * 1024 * 1024;
     private static final int QUESTION = 1, CAPTURE = 2, QUESTION_ACK = 3, CAPTURE_ACK = 4, HEARTBEAT = 5, AVAILABILITY = 6;
-    private static final int NETWORK_READY = 7, NETWORK_REPLY = 8;
     private static final int QUESTION_START = 9, QUESTION_PERMISSION = 10, CAPTURE_START = 11, TRANSFER_CONFLICT = 12;
     private static final int CAPTURE_PROGRESS = 13, CAPTURE_READY = 14, CAPTURE_COMMIT = 15;
+    private static final int CAPTURE_CHUNK = 16, QUESTION_CHUNK = 17, CANCEL = 18, CANCEL_ACK = 19;
+    private static final int BLUETOOTH_IMAGE_EDGE = 1280;
+    private static final byte[] CHUNK_FEATURE = "XFERPRT3".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] LIVE_FEATURE = "XFERLIVE".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] TRANSFER_FEATURE = "XFERLOCK".getBytes(StandardCharsets.US_ASCII);
     private static final long BLUETOOTH_IDLE_MS = 24_000;
@@ -125,6 +132,9 @@ public final class DuplexSync {
     private Toast conflictToast;
     private volatile Client client;
     private boolean monitoring;
+    private Boolean lastBluetoothRoute;
+    private volatile QuestionResult previousQuestion;
+    private record QuestionResult(byte[] id, boolean accepted) {}
 
     private DuplexSync(Context context) {
         this.context = context;
@@ -238,6 +248,14 @@ public final class DuplexSync {
 
     private void publish() {
         main.post(() -> {
+            Client active = client;
+            Session route = active == null ? null : active.session;
+            if (route != null && active.connected && active.cancellationRecovery == null) {
+                if (lastBluetoothRoute != null && lastBluetoothRoute != route.bluetooth) {
+                    showTransferMessage(route.bluetooth ? "已切换到蓝牙" : "已切换到 Wi-Fi");
+                }
+                lastBluetoothRoute = route.bluetooth;
+            }
             Listener current = listener;
             if (current != null) current.status(connected());
             SyncState.publish(context);
@@ -257,6 +275,8 @@ public final class DuplexSync {
         current.upload(name, data);
     }
 
+    private static final class RouteChanged extends IOException {}
+
     private final class Client {
         private final Pairing pairing;
         private final String serviceName;
@@ -270,14 +290,34 @@ public final class DuplexSync {
         private volatile Session session;
         private volatile CompletableFuture<Session> cancellationRecovery;
         private volatile BluetoothSyncLink bluetoothLink;
+        private final AtomicBoolean probing = new AtomicBoolean();
+        private final ExecutorService networkProbe = Executors.newSingleThreadExecutor(task -> new Thread(task, "padpaste-wifi-probe"));
+        private boolean networkCallbackRegistered;
+        private final ConnectivityManager.NetworkCallback networkEvents = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) { requestNetworkUpgrade(); }
+            @Override public void onLinkPropertiesChanged(Network network, android.net.LinkProperties properties) {
+                requestNetworkUpgrade();
+            }
+            @Override public void onLost(Network network) {
+                try {
+                    networkProbe.execute(() -> {
+                        Session current = session;
+                        if (current != null && !current.bluetooth && !hasLocalNetwork()) changeRoute(current, null);
+                    });
+                } catch (RejectedExecutionException stoppedClient) {
+                    // The old client has already stopped.
+                }
+            }
+        };
         private volatile String preferredNetwork;
         // Access to the handoff flag and reservations for an outbound screenshot is serialized.
         private final Object routing = new Object();
-        private boolean switchingToNetwork;
         private volatile int questionLength;
         private TransferProgress download;
+        private byte[] questionBytes;
+        private int questionOffset;
+        private byte[] questionId;
         private TransferProgress upload;
-        private long switchRequestedAt;
 
         Client(Pairing pairing) throws Exception { this.pairing = pairing; serviceName = pairing.serviceName(); }
 
@@ -297,6 +337,7 @@ public final class DuplexSync {
                         @Override public void onServiceResolved(NsdServiceInfo service) {
                             if (!stopped && service.getPort() == PORT && service.getHost() != null) {
                                 discoveredAddress = service.getHost().getHostAddress();
+                                requestNetworkUpgrade();
                             }
                         }
                     });
@@ -309,6 +350,15 @@ public final class DuplexSync {
                 try { nsd.discoverServices(SERVICE, NsdManager.PROTOCOL_DNS_SD, discovery); }
                 catch (RuntimeException ignored) {}
             }
+            if (connectivity != null) {
+                try {
+                    connectivity.registerNetworkCallback(new NetworkRequest.Builder()
+                            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                            .build(), networkEvents);
+                    networkCallbackRegistered = true;
+                } catch (RuntimeException ignored) {}
+            }
             reader.start();
         }
 
@@ -320,6 +370,8 @@ public final class DuplexSync {
                     cancellationRecovery = null;
                 }
             }
+            if (networkCallbackRegistered) connectivity.unregisterNetworkCallback(networkEvents);
+            networkProbe.shutdownNow();
             close(socket);
             close(bluetoothLink);
             reader.interrupt();
@@ -347,8 +399,7 @@ public final class DuplexSync {
             for (var network : connectivity.getAllNetworks()) {
                 NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
                 if (capabilities != null && (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                        || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-                        || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))) return true;
+                        || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) return true;
             }
             return false;
         }
@@ -394,7 +445,8 @@ public final class DuplexSync {
                     boolean cancelledOnBluetooth;
                     do {
                         cancelledOnBluetooth = connectBluetooth();
-                    } while (cancelledOnBluetooth && !stopped && bluetoothEnabled() && bluetoothRadioOn());
+                    } while (cancelledOnBluetooth && preferredNetwork == null
+                            && !stopped && bluetoothEnabled() && bluetoothRadioOn());
                     backoff = Math.max(backoff, 1800);
                     if (preferredNetwork != null) {
                         backoff = 450;
@@ -436,11 +488,12 @@ public final class DuplexSync {
             synchronized (routing) {
                 changed = connected;
                 Session previous = session;
-                cancelled = previous != null && previous.cancelledByUser;
+                cancelled = previous != null && (previous.cancelledByUser || previous.routeChanged);
                 connected = duplex = false;
                 session = null;
-                switchingToNetwork = false;
                 questionLength = 0;
+                questionBytes = null;
+                questionId = null;
                 if (download != null) download.finish(false);
                 if (upload != null) upload.finish(false);
                 download = upload = null;
@@ -484,14 +537,14 @@ public final class DuplexSync {
             publish();
             if (duplex) availability();
             ScheduledFuture<?> check = bluetooth
-                    ? maintenance.scheduleWithFixedDelay(() -> maintainBluetooth(link), 3, 3, TimeUnit.SECONDS)
+                    ? maintenance.scheduleWithFixedDelay(() -> maintainBluetooth(link), 1, 2, TimeUnit.SECONDS)
                     : null;
             try {
-                while (!stopped) {
+                while (!stopped && !link.routeChanged) {
                     int length = input.readInt();
                     if (length <= 28 || length > QUESTION_MAX + 29) throw new IOException("无效同步数据");
                     byte[] frame = new byte[length];
-                    if (download != null && questionLength == length) {
+                    if (!link.chunked && download != null && questionLength == length) {
                         for (int offset = 0; offset < length;) {
                             int count = input.read(frame, offset, Math.min(65536, length - offset));
                             if (count <= 0) throw new EOFException();
@@ -520,26 +573,36 @@ public final class DuplexSync {
                 close(link.transport);
                 return;
             }
-            synchronized (routing) {
-                if (switchingToNetwork) {
-                    if (now - switchRequestedAt >= BLUETOOTH_IDLE_MS) close(link.transport);
-                    return;
-                }
-            }
             if (!link.writing && now - link.lastWrite >= 7000 && receipt.get() == null) {
                 writer.execute(() -> sendBluetoothControl(link, HEARTBEAT));
             }
-            if (receipt.get() != null || questionLength != 0 || !hasLocalNetwork() || now - link.lastProbe < 12_000) return;
-            link.lastProbe = now;
-            String address = probeNetwork();
-            if (address == null) return;
-            synchronized (routing) {
-                if (stopped || session != link || receipt.get() != null || questionLength != 0) return;
-                link.networkCandidate = address;
-                switchingToNetwork = true;
-                switchRequestedAt = SystemClock.elapsedRealtime();
-                writer.execute(() -> sendBluetoothControl(link, NETWORK_READY));
+            requestNetworkUpgrade();
+        }
+
+        private void requestNetworkUpgrade() {
+            Session current = session;
+            if (stopped || current == null || !current.bluetooth || current.routeChanged || !hasLocalNetwork()
+                    || !probing.compareAndSet(false, true)) return;
+            try {
+                networkProbe.execute(() -> {
+                    try {
+                        String address = probeNetwork();
+                        if (address != null) changeRoute(current, address);
+                    } finally { probing.set(false); }
+                });
+            } catch (RejectedExecutionException stoppedClient) {
+                probing.set(false);
             }
+        }
+
+        private void changeRoute(Session current, String preferredAddress) {
+            synchronized (routing) {
+                if (stopped || session != current || current.routeChanged || current.cancelledByUser) return;
+                current.routeChanged = true;
+                preferredNetwork = preferredAddress;
+                if (cancellationRecovery == null) cancellationRecovery = new CompletableFuture<>();
+            }
+            close(current.transport);
         }
 
         private String probeNetwork() {
@@ -566,6 +629,21 @@ public final class DuplexSync {
             switch (frame[0]) {
                 case QUESTION -> receiveQuestion(link, frame);
                 case QUESTION_START -> requestQuestion(link, frame);
+                case QUESTION_CHUNK -> receiveQuestionChunk(link, frame);
+                case CANCEL_ACK -> {
+                    if (!link.chunked || frame.length != 2) throw new IOException("无效取消回执");
+                    synchronized (routing) {
+                        if (frame[1] == CAPTURE && upload != null && upload.cancelled) {
+                            CompletableFuture<Boolean> pending = receipt.get();
+                            if (pending != null) pending.complete(false);
+                        } else if (frame[1] == QUESTION && download != null && download.cancelled) {
+                            questionLength = 0;
+                            questionBytes = null;
+                            questionId = null;
+                            download = null;
+                        }
+                    }
+                }
                 case TRANSFER_CONFLICT -> {
                     if (!link.transferLock || frame.length != 1) throw new IOException("无效的传输状态");
                     showTransferMessage("正在上传截图，本次题图未接收");
@@ -583,19 +661,6 @@ public final class DuplexSync {
                     }
                 }
                 case HEARTBEAT -> { if (frame.length != 1) throw new IOException("无效同步心跳"); }
-                case NETWORK_REPLY -> {
-                    synchronized (routing) {
-                        if (!link.bluetooth || !switchingToNetwork || frame.length != 2) {
-                            throw new IOException("无效的 Wi-Fi 切换回执");
-                        }
-                        if (frame[1] == 1) {
-                            preferredNetwork = link.networkCandidate;
-                            close(link.transport);
-                        } else {
-                            switchingToNetwork = false;
-                        }
-                    }
-                }
                 default -> throw new IOException("无效同步类型");
             }
         }
@@ -605,7 +670,7 @@ public final class DuplexSync {
             int transferred = ByteBuffer.wrap(frame, 1, 4).getInt();
             synchronized (routing) {
                 TransferProgress current = upload;
-                if (current == null || current.cancelled || current.committing) return;
+                if (current == null || current.cancelled || current.committing || link.routeChanged) return;
                 if (transferred < 0 || transferred > current.total) throw new IOException("无效的上传进度");
                 if (transferred > current.transferred) {
                     current.transferred = transferred;
@@ -618,7 +683,7 @@ public final class DuplexSync {
             if (!link.liveProgress || frame.length != 1) throw new IOException("无效的上传确认");
             synchronized (routing) {
                 TransferProgress current = upload;
-                if (current == null || current.cancelled || current.committing) return;
+                if (current == null || current.cancelled || current.committing || link.routeChanged) return;
                 current.transferred = current.total;
                 current.activity = SystemClock.elapsedRealtime();
                 current.committing = true;
@@ -632,30 +697,52 @@ public final class DuplexSync {
                 if (progress == null || (progress != upload && progress != download) || !progress.canCancel()) return false;
                 current = session;
                 if (current == null) return false;
-                current.cancelledByUser = true;
-                cancellationRecovery = new CompletableFuture<>();
                 progress.cancelled = true;
                 progress.finish(false);
-                CompletableFuture<Boolean> pending = receipt.get();
-                if (pending != null) pending.complete(false);
+                if (!progress.uploading && questionId != null) previousQuestion = new QuestionResult(questionId, false);
+                if (!current.chunked) {
+                    current.cancelledByUser = true;
+                    cancellationRecovery = new CompletableFuture<>();
+                    CompletableFuture<Boolean> pending = receipt.get();
+                    if (pending != null) pending.complete(false);
+                }
             }
-            // Do not wait behind Wi-Fi probes on the Bluetooth maintenance executor.
-            new Thread(() -> close(current.transport), "padpaste-cancel-link").start();
+            if (current.chunked) {
+                writer.execute(() -> {
+                    if (session != current) return;
+                    try { current.send(CANCEL, new byte[]{(byte) (progress.uploading ? CAPTURE : QUESTION)}); }
+                    catch (Exception failure) { close(current.transport); }
+                });
+            } else {
+                new Thread(() -> close(current.transport), "padpaste-cancel-link").start();
+            }
             publish();
             return true;
         }
 
         private void requestQuestion(Session link, byte[] frame) throws Exception {
-            if (!link.transferLock || frame.length != 5) throw new IOException("无效的题图请求");
+            if (!link.transferLock || frame.length != (link.chunked ? 21 : 5)) throw new IOException("无效的题图请求");
+            byte[] id = link.chunked ? Arrays.copyOfRange(frame, 5, 21) : null;
+            QuestionResult previous = previousQuestion;
+            if (id != null && previous != null && Arrays.equals(id, previous.id)) {
+                link.send(QUESTION_PERMISSION, new byte[]{(byte) (previous.accepted ? 2 : 0)});
+                return;
+            }
             int size = ByteBuffer.wrap(frame, 1, 4).getInt();
             if (size <= 0 || size > QUESTION_MAX) throw new IOException("题图尺寸无效");
             boolean busy;
             boolean granted;
             synchronized (routing) {
                 busy = receipt.get() != null || questionLength != 0;
-                granted = !busy && !switchingToNetwork && listener != null;
+                granted = !busy && !link.routeChanged && listener != null;
                 if (granted) {
                     questionLength = size + 29;
+                    questionId = id;
+                    if (link.chunked) {
+                        questionBytes = new byte[size + 1];
+                        questionBytes[0] = QUESTION;
+                        questionOffset = 1;
+                    }
                     download = new TransferProgress(false, questionLength);
                     startProgress(download);
                 }
@@ -674,6 +761,15 @@ public final class DuplexSync {
             }
         }
 
+        private void receiveQuestionChunk(Session link, byte[] frame) throws Exception {
+            if (!link.chunked || questionBytes == null || frame.length <= 1
+                    || questionOffset + frame.length - 1 > questionBytes.length) throw new IOException("无效的题图数据");
+            System.arraycopy(frame, 1, questionBytes, questionOffset, frame.length - 1);
+            questionOffset += frame.length - 1;
+            download.transferred = questionOffset - 1;
+            if (questionOffset == questionBytes.length && !download.cancelled) receiveQuestion(link, questionBytes);
+        }
+
         private void receiveQuestion(Session link, byte[] frame) throws Exception {
             if (link.transferLock && (download == null || frame.length + 28 != questionLength)) {
                 throw new IOException("题图未获传输许可");
@@ -682,7 +778,7 @@ public final class DuplexSync {
             boolean accepted = deliver(Arrays.copyOfRange(frame, 1, frame.length), () -> {
                 synchronized (routing) {
                     if (current == null) return !stopped;
-                    if (current.cancelled || session != link) return false;
+                    if (current.cancelled || session != link || link.routeChanged) return false;
                     current.committing = true;
                     return true;
                 }
@@ -690,9 +786,12 @@ public final class DuplexSync {
             // Publish the acknowledgement on the wire before any newly reserved upload can write.
             synchronized (routing) {
                 if (current != null && current.cancelled) return;
+                if (questionId != null) previousQuestion = new QuestionResult(questionId, accepted);
                 link.send(QUESTION_ACK, new byte[]{(byte) (accepted ? 1 : 0)});
+                questionId = null;
                 if (current != null) current.finish(accepted);
                 download = null;
+                questionBytes = null;
                 questionLength = 0;
             }
         }
@@ -726,9 +825,24 @@ public final class DuplexSync {
             }
         }
 
-        private void upload(String name, byte[] data) throws IOException {
-            Session link = sessionAfterCancellation();
-            byte[] filename = name.getBytes(StandardCharsets.UTF_8);
+        private void upload(String name, byte[] original) throws IOException {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                Session link = sessionAfterCancellation();
+                if (link == null) throw new IOException("Mac 尚未连接");
+                try {
+                    upload(link, name, original);
+                    return;
+                } catch (RouteChanged changed) {
+                    if (attempt == 2) throw new IOException("连接反复切换，截图未上传", changed);
+                }
+            }
+        }
+
+        private void upload(Session link, String name, byte[] original) throws IOException {
+            if (link.routeChanged) throw new RouteChanged();
+            byte[] data = link.bluetooth ? compactScreenshot(original) : original;
+            String wireName = link.bluetooth ? name + ".jpg" : name;
+            byte[] filename = wireName.getBytes(StandardCharsets.UTF_8);
             if (!connected || !duplex || link == null || filename.length > 255 || data.length > CAPTURE_MAX) {
                 throw new IOException("Mac 尚未连接或截图过大");
             }
@@ -736,7 +850,8 @@ public final class DuplexSync {
             var pending = new CompletableFuture<Boolean>();
             var progress = new TransferProgress(true, data.length + filename.length + 30);
             synchronized (routing) {
-                if (session != link || link.cancelledByUser || switchingToNetwork) throw new IOException("正在切换同步连接");
+                if (link.routeChanged) throw new RouteChanged();
+                if (session != link || link.cancelledByUser) throw new IOException("正在切换同步连接");
                 if (questionLength != 0) throw new TransferConflict();
                 if (!receipt.compareAndSet(null, pending)) throw new IOException("上一张截图仍在传输");
                 upload = progress;
@@ -745,7 +860,7 @@ public final class DuplexSync {
             if (link.bluetooth) link.lastWrite = SystemClock.elapsedRealtime();
             writer.execute(() -> {
                 try {
-                    if (session != link || progress.cancelled || receipt.get() != pending) return;
+                    if (session != link || receipt.get() != pending || (progress.cancelled && !link.chunked)) return;
                     byte[] header = new byte[2 + filename.length];
                     header[0] = CAPTURE;
                     header[1] = (byte) filename.length;
@@ -755,7 +870,17 @@ public final class DuplexSync {
                                 ? ByteBuffer.allocate(4).putInt(progress.total).array() : new byte[0];
                         link.send(CAPTURE_START, announcement);
                     }
-                    link.sendParts(header, data, progress);
+                    if (link.chunked) {
+                        if (!progress.cancelled) {
+                            link.send(CAPTURE_CHUNK, Arrays.copyOfRange(header, 1, header.length));
+                            int chunk = link.bluetooth ? 8192 : 65536;
+                            for (int offset = 0; offset < data.length && !progress.cancelled && !link.routeChanged; offset += chunk) {
+                                link.send(CAPTURE_CHUNK, Arrays.copyOfRange(data, offset, Math.min(offset + chunk, data.length)));
+                            }
+                        }
+                    } else {
+                        link.sendParts(header, data, progress);
+                    }
                 } catch (Exception failure) {
                     if (!progress.cancelled) {
                         android.util.Log.w("PadPasteSync", "Screenshot send failed: " + failure.getClass().getSimpleName());
@@ -768,6 +893,7 @@ public final class DuplexSync {
                 if (!(link.liveProgress || link.bluetooth ? waitForReceipt(link, pending, progress)
                         : pending.get(9, TimeUnit.SECONDS))) {
                     if (progress.cancelled) throw new TransferCancelled();
+                    if (link.routeChanged) throw new RouteChanged();
                     throw new IOException("Mac 未接收截图");
                 }
             } catch (InterruptedException interrupted) {
@@ -777,6 +903,7 @@ public final class DuplexSync {
             } catch (TimeoutException | ExecutionException failure) {
                 close(link.transport);
                 if (progress.cancelled) throw new TransferCancelled();
+                if (link.routeChanged) throw new RouteChanged();
                 android.util.Log.w("PadPasteSync", "Upload stalled: receiver confirmed "
                         + progress.transferred + "/" + progress.total + " bytes, commit=" + progress.committing);
                 throw new IOException("Mac 未确认截图", failure);
@@ -797,7 +924,7 @@ public final class DuplexSync {
                 try { return pending.get(2, TimeUnit.SECONDS); }
                 catch (TimeoutException timeout) {
                     long activity = link.liveProgress ? progress.activity : link.lastWrite;
-                    if (progress.cancelled || SystemClock.elapsedRealtime() - activity >= idle) throw timeout;
+                    if (SystemClock.elapsedRealtime() - activity >= idle) throw timeout;
                 }
             }
         }
@@ -809,11 +936,12 @@ public final class DuplexSync {
         private final boolean bluetooth;
         private boolean transferLock;
         private boolean liveProgress;
+        private boolean chunked;
+        volatile boolean routeChanged;
         private boolean cancelledByUser;
         volatile boolean writing;
         volatile long lastRead = SystemClock.elapsedRealtime(), lastWrite = lastRead;
         long lastProbe;
-        String networkCandidate;
         private final byte[] context;
         private final byte[] key;
 
@@ -847,7 +975,7 @@ public final class DuplexSync {
             RANDOM.nextBytes(nonce);
             System.arraycopy(VERSION, 0, nonce, 0, VERSION.length);
             System.arraycopy(TRANSFER_FEATURE, 0, nonce, VERSION.length, TRANSFER_FEATURE.length);
-            System.arraycopy(LIVE_FEATURE, 0, nonce, VERSION.length + TRANSFER_FEATURE.length, LIVE_FEATURE.length);
+            System.arraycopy(CHUNK_FEATURE, 0, nonce, VERSION.length + TRANSFER_FEATURE.length, CHUNK_FEATURE.length);
             System.arraycopy(nonce, 0, context, 0, nonce.length);
             output.write(nonce);
             input.readFully(context, 32, 32);
@@ -859,8 +987,9 @@ public final class DuplexSync {
             transferLock = duplex && Arrays.equals(TRANSFER_FEATURE,
                     Arrays.copyOfRange(context, capability, capability + TRANSFER_FEATURE.length));
             int live = capability + TRANSFER_FEATURE.length;
-            liveProgress = transferLock && Arrays.equals(LIVE_FEATURE,
-                    Arrays.copyOfRange(context, live, live + LIVE_FEATURE.length));
+            byte[] feature = Arrays.copyOfRange(context, live, live + LIVE_FEATURE.length);
+            chunked = transferLock && Arrays.equals(CHUNK_FEATURE, feature);
+            liveProgress = chunked || (transferLock && Arrays.equals(LIVE_FEATURE, feature));
             return duplex;
         }
 
@@ -928,6 +1057,29 @@ public final class DuplexSync {
             byte[] message = Arrays.copyOf(label, label.length + context.length);
             System.arraycopy(context, 0, message, label.length, context.length);
             return message;
+        }
+    }
+
+    private static byte[] compactScreenshot(byte[] original) throws IOException {
+        var bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(original, 0, original.length, bounds);
+        var options = new BitmapFactory.Options();
+        options.inSampleSize = Math.max(1, Integer.highestOneBit(
+                Math.max(bounds.outWidth, bounds.outHeight) / BLUETOOTH_IMAGE_EDGE));
+        Bitmap decoded = BitmapFactory.decodeByteArray(original, 0, original.length, options);
+        if (decoded == null) throw new IOException("无法缩小蓝牙截图");
+        Bitmap image = decoded;
+        try (var encoded = new ByteArrayOutputStream()) {
+            float scale = (float) BLUETOOTH_IMAGE_EDGE / Math.max(decoded.getWidth(), decoded.getHeight());
+            if (scale < 1) image = Bitmap.createScaledBitmap(decoded,
+                    Math.max(1, Math.round(decoded.getWidth() * scale)),
+                    Math.max(1, Math.round(decoded.getHeight() * scale)), true);
+            if (!image.compress(Bitmap.CompressFormat.JPEG, 75, encoded)) throw new IOException("无法压缩蓝牙截图");
+            return encoded.toByteArray();
+        } finally {
+            if (image != decoded) image.recycle();
+            decoded.recycle();
         }
     }
 

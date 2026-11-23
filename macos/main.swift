@@ -173,19 +173,9 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         guard let type = formats.first(where: { item.types.contains($0) }),
               let data = item.data(forType: type) else { return }
         sendingQuestion = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let image = QuestionLink.prepare(data)
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard let image, self.watchClipboard, self.questionConnected else {
-                    self.sendingQuestion = false
-                    return
-                }
-                questions.send(image) { [weak self] ok in
-                    self?.sendingQuestion = false
-                    if !ok { self?.showFeedback("题图发送失败，重新复制图片可重试") }
-                }
-            }
+        questions.send(data) { [weak self] ok in
+            self?.sendingQuestion = false
+            if !ok { self?.showFeedback("题图发送失败，重新复制图片可重试") }
         }
     }
 

@@ -8,6 +8,7 @@ final class FastScreenshotReceiver {
     private var listener: NWListener?
     private var discovery: NWListener?
     private let queue = DispatchQueue(label: "tablet.screenshot.receive", qos: .userInitiated)
+    private var pending: [String: [(Int, String) -> Void]] = [:]
     private var committed = Set<String>()
     private var trace: [[String: Any]] = []
     let onReceived: (String) -> Void
@@ -74,7 +75,26 @@ final class FastScreenshotReceiver {
     fileprivate static let screenshotName = "^Screenshot_[A-Za-z0-9._-]{1,220}\\.(jpg|jpeg|png|webp)$"
 
     private func accept(name: String, body: Data, began: Double, respond: @escaping (Int, String) -> Void) {
-        if committed.contains(name) { respond(200, "duplicate"); return }
+        let original = name.hasSuffix(".jpg") ? String(name.dropLast(4)) : name
+        let identity = original.range(of: Self.screenshotName, options: .regularExpression) == nil ? name : original
+        if committed.contains(identity) { respond(200, "duplicate"); return }
+        if pending[identity] != nil {
+            pending[identity]?.append(respond)
+            return
+        }
+        pending[identity] = [respond]
+        publish(name: name, body: body, began: began) { [weak self] code, reason in
+            guard let self else { return }
+            if code == 200 {
+                if self.committed.count >= 1000 { self.committed.removeAll(keepingCapacity: true) }
+                self.committed.insert(identity)
+            }
+            let waiters = self.pending.removeValue(forKey: identity)
+            waiters?.forEach { $0(code, reason) }
+        }
+    }
+
+    private func publish(name: String, body: Data, began: Double, respond: @escaping (Int, String) -> Void) {
         let bodyDone = Date().timeIntervalSince1970 * 1000
         guard let source = CGImageSourceCreateWithData(body as CFData, nil),
               CGImageSourceGetStatus(source) == .statusComplete,
@@ -98,12 +118,13 @@ final class FastScreenshotReceiver {
             }
             let pb = NSPasteboard.general
             pb.clearContents()
-            guard pb.writeObjects([item]) else { respond(500, "clipboard write failed"); return }
+            guard pb.writeObjects([item]) else {
+                self.queue.async { respond(500, "clipboard write failed") }
+                return
+            }
             let published = Date().timeIntervalSince1970 * 1000
             self.onReceived(name)
             self.queue.async {
-                if self.committed.count >= 1000 { self.committed.removeAll(keepingCapacity: true) }
-                self.committed.insert(name)
                 respond(200, "clipboard ready")
                 self.trace.append(["name": name, "bytes": body.count, "connectionMs": began,
                     "bodyDoneMs": bodyDone, "imageReadyMs": prepared, "clipboardMs": published,

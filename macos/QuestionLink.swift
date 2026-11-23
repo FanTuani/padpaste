@@ -14,6 +14,18 @@ final class QuestionLink {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "padpaste.questions")
     private var tablet: QuestionPeer?
+    private final class OutboundQuestion {
+        let source: Data
+        let id = withUnsafeBytes(of: UUID().uuid) { Data($0) }
+        let finish: (Bool) -> Void
+        var peer: QuestionPeer?
+        var recovery: DispatchWorkItem?
+        init(_ source: Data, finish: @escaping (Bool) -> Void) {
+            self.source = source
+            self.finish = finish
+        }
+    }
+    private var outgoing: OutboundQuestion?
     private var bluetooth: BluetoothLink?
     var statusChanged: ((Bool, String?) -> Void)?
     var bluetoothStatus: ((String) -> Void)?
@@ -107,9 +119,11 @@ final class QuestionLink {
                 self.tablet = nil
             } else { return }
             self.publishAvailability()
+            self.sendOnCurrentRoute()
         }, availability: { [weak self, weak peer] in
             guard let self, let peer, self.tablet === peer else { return }
             self.publishAvailability()
+            self.sendOnCurrentRoute()
         }, receive: receiveScreenshot)
     }
 
@@ -119,23 +133,75 @@ final class QuestionLink {
         DispatchQueue.main.async { self.statusChanged?(available, route) }
     }
 
-    func send(_ image: Data, completion: @escaping (Bool) -> Void) {
+    func send(_ source: Data, completion: @escaping (Bool) -> Void) {
         queue.async {
-            let finish: (Bool) -> Void = { ok in DispatchQueue.main.async { completion(ok) } }
-            guard let tablet = self.tablet, tablet.acceptsQuestions else { finish(false); return }
-            tablet.send(image, finish: finish)
+            guard self.outgoing == nil, self.tablet?.acceptsQuestions == true else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            self.outgoing = OutboundQuestion(source) { ok in DispatchQueue.main.async { completion(ok) } }
+            self.sendOnCurrentRoute()
         }
     }
 
-    static func prepare(_ data: Data) -> Data? {
+    private func sendOnCurrentRoute() {
+        guard let question = outgoing, let peer = tablet, peer.acceptsQuestions, question.peer !== peer else { return }
+        if let previous = question.peer, previous.bluetooth == peer.bluetooth {
+            complete(question, false)
+            return
+        }
+        question.recovery?.cancel()
+        question.peer = peer
+        let bluetooth = peer.bluetooth
+        DispatchQueue.global(qos: .userInitiated).async { [self, question, peer] in
+            let image = Self.prepare(question.source, bluetooth: bluetooth)
+            self.queue.async { [self, question, peer] in
+                guard self.outgoing === question, question.peer === peer else { return }
+                guard self.tablet === peer, peer.acceptsQuestions else {
+                    self.awaitRoute(question)
+                    return
+                }
+                guard let image else { self.complete(question, false); return }
+                peer.send(image, id: question.id) { [weak self, weak question, weak peer] ok in
+                    guard let self, let question, let peer, self.outgoing === question,
+                          question.peer === peer else { return }
+                    if !ok && peer.isClosed {
+                        self.awaitRoute(question)
+                    } else {
+                        self.complete(question, ok)
+                    }
+                }
+            }
+        }
+    }
+
+    private func awaitRoute(_ question: OutboundQuestion) {
+        question.recovery?.cancel()
+        let timeout = DispatchWorkItem { [weak self, weak question] in
+            if let self, let question { self.complete(question, false) }
+        }
+        question.recovery = timeout
+        queue.asyncAfter(deadline: .now() + 16, execute: timeout)
+        sendOnCurrentRoute()
+    }
+
+    private func complete(_ question: OutboundQuestion, _ ok: Bool) {
+        guard outgoing === question else { return }
+        question.recovery?.cancel()
+        outgoing = nil
+        question.finish(ok)
+    }
+
+    static func prepare(_ data: Data, bluetooth: Bool = false) -> Data? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: 2400,
+                kCGImageSourceThumbnailMaxPixelSize: bluetooth ? 1280 : 2400,
                 kCGImageSourceCreateThumbnailWithTransform: true
               ] as CFDictionary) else { return nil }
-        return encode(image, type: .png, options: nil)
-            ?? encode(image, type: .jpeg, options: [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        let jpeg = [kCGImageDestinationLossyCompressionQuality: bluetooth ? 0.75 : 0.9] as CFDictionary
+        if bluetooth { return encode(image, type: .jpeg, options: jpeg) }
+        return encode(image, type: .png, options: nil) ?? encode(image, type: .jpeg, options: jpeg)
     }
 
     private static func encode(_ image: CGImage, type: UTType, options: CFDictionary?) -> Data? {
@@ -164,6 +230,11 @@ private final class QuestionPeer {
     private let queue: DispatchQueue
     private static let version = Data("PADSYNC2".utf8)
     private static let transferFeature = Data("XFERLOCK".utf8)
+    private static let chunkFeature = Data("XFERPRT3".utf8)
+    private static let captureChunk: UInt8 = 16
+    private static let questionChunk: UInt8 = 17
+    private static let cancelTransfer: UInt8 = 18
+    private static let cancelAck: UInt8 = 19
     private static let liveFeature = Data("XFERLIVE".utf8)
     private static let captureProgress: UInt8 = 13
     private static let captureReady: UInt8 = 14
@@ -177,6 +248,8 @@ private final class QuestionPeer {
     private var duplex = false
     private var transferLock = false
     private var liveProgress = false
+    private var chunked = false
+    private var questionGeneration = 0
     private var heartbeat: DispatchSourceTimer?
     private var availabilityChanged: (() -> Void)?
     private var receiveScreenshot: ((String, Data, @escaping (Bool) -> Void) -> Void)?
@@ -194,6 +267,7 @@ private final class QuestionPeer {
     private var deadline: DispatchWorkItem?
     private var expectedAck = Data()
     private var closed = false
+    var isClosed: Bool { closed }
 
     init(_ transport: Transport, key: SymmetricKey, queue: DispatchQueue) {
         self.transport = transport
@@ -231,8 +305,11 @@ private final class QuestionPeer {
                 if self.transferLock {
                     serverNonce.replaceSubrange(capability, with: Self.transferFeature)
                     let progress = capability.upperBound..<(capability.upperBound + Self.liveFeature.count)
-                    self.liveProgress = clientNonce[progress] == Self.liveFeature
-                    if self.liveProgress { serverNonce.replaceSubrange(progress, with: Self.liveFeature) }
+                    self.chunked = clientNonce[progress] == Self.chunkFeature
+                    self.liveProgress = self.chunked || clientNonce[progress] == Self.liveFeature
+                    if self.liveProgress {
+                        serverNonce.replaceSubrange(progress, with: self.chunked ? Self.chunkFeature : Self.liveFeature)
+                    }
                 }
             }
             self.context = clientNonce + serverNonce
@@ -255,7 +332,7 @@ private final class QuestionPeer {
         }
     }
 
-    func send(_ image: Data, finish: @escaping (Bool) -> Void) {
+    func send(_ image: Data, id: Data, finish: @escaping (Bool) -> Void) {
         guard !closed, !switchingToNetwork, awaiting == nil, image.count <= QuestionLink.byteLimit else { finish(false); return }
         if duplex {
             if transferLock && (captureAnnounced || receivingCapture) {
@@ -268,7 +345,9 @@ private final class QuestionPeer {
                 pendingQuestion = image
                 var count = UInt32(image.count).bigEndian
                 timeOut()
-                writeFrame(Self.questionStart, withUnsafeBytes(of: &count) { Data($0) })
+                var request = withUnsafeBytes(of: &count) { Data($0) }
+                if chunked { request.append(id) }
+                writeFrame(Self.questionStart, request)
             } else {
                 sendQuestion(image)
             }
@@ -285,9 +364,26 @@ private final class QuestionPeer {
 
     private func sendQuestion(_ image: Data) {
         deadline?.cancel()
+        if chunked {
+            questionGeneration += 1
+            sendQuestionChunk(image, from: 0, generation: questionGeneration)
+            return
+        }
         if !bluetooth { timeOut() }
         writeFrame(1, image) { [weak self] in
             if let self, self.bluetooth && self.awaiting != nil { self.timeOut() }
+        }
+    }
+
+    private func sendQuestionChunk(_ image: Data, from offset: Int, generation: Int) {
+        guard !closed, awaiting != nil, generation == questionGeneration else { return }
+        if offset == image.count {
+            timeOut(seconds: bluetooth ? 15 : 7)
+            return
+        }
+        let end = min(image.count, offset + (bluetooth ? 8192 : 65536))
+        writeFrame(Self.questionChunk, image.subdata(in: offset..<end)) { [weak self] in
+            self?.sendQuestionChunk(image, from: end, generation: generation)
         }
     }
 
@@ -295,6 +391,7 @@ private final class QuestionPeer {
         guard let finish = awaiting else { close(); return }
         pendingQuestion = nil
         awaiting = nil
+        questionGeneration += 1
         deadline?.cancel()
         finish(accepted)
     }
@@ -322,7 +419,7 @@ private final class QuestionPeer {
             let length = header.reduce(0) { ($0 << 8) | Int($1) }
             let limit = self.bluetooth ? QuestionLink.byteLimit + 285 : Self.maxCaptureFrame
             guard length > 28, length <= limit else { self.close(); return }
-            if self.liveProgress && self.captureAnnounced && length == self.captureLength {
+            if self.liveProgress && !self.chunked && self.captureAnnounced && length == self.captureLength {
                 self.capturePayload = Data(capacity: length)
                 self.lastProgressReport = 0
                 self.readCapture(length)
@@ -343,14 +440,17 @@ private final class QuestionPeer {
                 self.receiveFrame(payload)
                 return
             }
-            let now = ProcessInfo.processInfo.systemUptime
-            if now - self.lastProgressReport >= 0.16 {
-                self.lastProgressReport = now
-                var confirmed = UInt32(self.capturePayload.count).bigEndian
-                self.writeFrame(Self.captureProgress, withUnsafeBytes(of: &confirmed) { Data($0) })
-            }
+            self.reportCaptureProgress()
             self.readCapture(length)
         }
+    }
+
+    private func reportCaptureProgress() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastProgressReport >= 0.16 else { return }
+        lastProgressReport = now
+        var confirmed = UInt32(capturePayload.count).bigEndian
+        writeFrame(Self.captureProgress, withUnsafeBytes(of: &confirmed) { Data($0) })
     }
 
     private func receiveFrame(_ payload: Data) {
@@ -370,7 +470,7 @@ private final class QuestionPeer {
                 pendingQuestion = nil
                 sendQuestion(image)
             } else {
-                finishQuestion(false)
+                finishQuestion(chunked && content.first == 2)
             }
         case Self.captureStart:
             guard transferLock, content.count == (liveProgress ? 4 : 0),
@@ -381,11 +481,40 @@ private final class QuestionPeer {
                 let limit = bluetooth ? QuestionLink.byteLimit + 285 : Self.maxCaptureFrame
                 guard length >= 32, length <= limit else { close(); return }
                 captureLength = length
+                if chunked {
+                    capturePayload = Data(capacity: length - 29)
+                    lastProgressReport = 0
+                }
             }
             captureAnnounced = true
             // A refusal queued behind this upload can arrive after the usual handshake deadline.
             if pendingQuestion != nil { deadline?.cancel() }
+        case Self.captureChunk:
+            guard chunked, captureAnnounced, !receivingCapture, !content.isEmpty,
+                  capturePayload.count + content.count <= captureLength - 29 else { close(); return }
+            capturePayload.append(content)
+            if capturePayload.count == captureLength - 29 {
+                let image = capturePayload
+                capturePayload = Data()
+                stageCapture(image)
+            } else {
+                reportCaptureProgress()
+            }
+        case Self.cancelTransfer:
+            guard chunked, content.count == 1, let direction = content.first else { close(); return }
+            if direction == 2 {
+                capturePayload = Data()
+                captureAnnounced = false
+                receivingCapture = false
+                captureLength = 0
+                commitCapture = nil
+                if pendingQuestion != nil { timeOut() } else { deadline?.cancel() }
+            } else if direction == 1 {
+                if awaiting != nil { finishQuestion(false) }
+            } else { close(); return }
+            writeFrame(Self.cancelAck, Data([direction]))
         case 2:
+            guard !chunked else { close(); return }
             stageCapture(content)
         case Self.captureCommit:
             guard liveProgress, content.isEmpty, let commit = commitCapture else { close(); return }
