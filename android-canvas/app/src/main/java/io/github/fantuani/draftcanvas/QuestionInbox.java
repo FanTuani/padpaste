@@ -4,30 +4,21 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.animation.OvershootInterpolator;
 import android.view.animation.PathInterpolator;
-import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -35,8 +26,7 @@ import io.github.fantuani.padpaste.DuplexSync;
 import io.github.fantuani.padpaste.SyncService;
 
 final class QuestionInbox implements DuplexSync.Listener {
-    static final int PICK_PAIRING = 630;
-    private static final String RECEIVE_ENABLED = "receive_enabled";
+    static final String RECEIVE_ENABLED = "receive_enabled";
     private record Candidate(byte[] data, Bitmap bitmap) {}
     private final Activity activity;
     private final CanvasView canvas;
@@ -52,11 +42,6 @@ final class QuestionInbox implements DuplexSync.Listener {
     private ValueAnimator motion;
     private float offerAlpha, offerScale, offerLift, controlsAlpha;
     private final DuplexSync link;
-    private TextView connectionLabel;
-    private final BroadcastReceiver syncStatus = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) { renderSyncStatus(); }
-    };
-    private AlertDialog syncDialog;
     private Candidate candidate;
     private boolean active, importing;
     private long previousId, lastImport;
@@ -66,7 +51,7 @@ final class QuestionInbox implements DuplexSync.Listener {
         this.canvas = canvas;
         this.draftStore = draftStore;
         this.assets = QuestionAssets.get(activity);
-        preferences = activity.getSharedPreferences("question_link", Activity.MODE_PRIVATE);
+        preferences = preferences(activity);
         link = DuplexSync.get(activity);
         canvas.questionAssets = assets;
 
@@ -98,106 +83,15 @@ final class QuestionInbox implements DuplexSync.Listener {
         updateSubscription();
     }
 
-    private void updateSubscription() {
+    void updateSubscription() {
         link.listen(active && preferences.getBoolean(RECEIVE_ENABLED, true) ? this : null);
     }
 
-    @Override public void status(boolean connected) { renderSyncStatus(); }
-
-    private void renderSyncStatus() {
-        if (connectionLabel == null) return;
-        String state = !link.paired() ? "尚未配对"
-                : link.connected() ? (link.duplex() ? "已连接 Mac" : "已连接 · 旧版 Mac")
-                : !preferences.getBoolean(RECEIVE_ENABLED, true) && !SyncService.enabled(activity) ? "已暂停"
-                : "等待 Mac 连接";
-        connectionLabel.setText(state);
-        connectionLabel.setTextColor(link.connected() ? 0xFF167B70 : 0xFF65706D);
+    static SharedPreferences preferences(Context context) {
+        return context.getSharedPreferences("question_link", Context.MODE_PRIVATE);
     }
 
-    @android.annotation.SuppressLint({"UnspecifiedRegisterReceiverFlag", "UseSwitchCompatOrMaterialCode"})
-    void settings() {
-        if (syncDialog != null) return;
-        LinearLayout content = new LinearLayout(activity);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(24), dp(8), dp(24), dp(6));
-        connectionLabel = new TextView(activity);
-        connectionLabel.setTextSize(19);
-        connectionLabel.setTypeface(null, Typeface.BOLD);
-        content.addView(connectionLabel, new LinearLayout.LayoutParams(-1, dp(46)));
-        Switch receive = new Switch(activity);
-        receive.setText("Mac 剪贴板 → 草稿纸");
-        receive.setChecked(preferences.getBoolean(RECEIVE_ENABLED, true));
-        receive.setOnCheckedChangeListener((view, enabled) -> {
-            preferences.edit().putBoolean(RECEIVE_ENABLED, enabled).apply();
-            updateSubscription();
-            renderSyncStatus();
-        });
-        content.addView(receive, new LinearLayout.LayoutParams(-1, dp(54)));
-        Switch send = new Switch(activity);
-        send.setText("平板截图 → Mac 剪贴板");
-        send.setChecked(SyncService.enabled(activity));
-        send.setOnCheckedChangeListener((view, enabled) -> {
-            SyncService.setEnabled(activity, enabled);
-            if (enabled && !SyncService.filesAllowed(activity)) {
-                if (Build.VERSION.SDK_INT >= 30) {
-                    activity.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                            android.net.Uri.parse("package:" + activity.getPackageName())));
-                } else {
-                    activity.requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                            android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 103);
-                }
-            }
-            renderSyncStatus();
-        });
-        content.addView(send, new LinearLayout.LayoutParams(-1, dp(54)));
-        syncDialog = new AlertDialog.Builder(activity).setTitle("同步").setView(content)
-                .setPositiveButton("完成", null)
-                .setNegativeButton("配对 Mac", (dialog, index) -> pairingSettings())
-                .setNeutralButton("重新连接", null).create();
-        syncDialog.setOnDismissListener(dialog -> {
-            activity.unregisterReceiver(syncStatus);
-            syncDialog = null;
-            connectionLabel = null;
-        });
-        IntentFilter changes = new IntentFilter(SyncService.STATE_ACTION);
-        if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(syncStatus, changes, Context.RECEIVER_NOT_EXPORTED);
-        else activity.registerReceiver(syncStatus, changes);
-        syncDialog.show();
-        syncDialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> link.reconnect());
-        renderSyncStatus();
-    }
-
-    private void pairingSettings() {
-        EditText input = new EditText(activity);
-        input.setHint("粘贴配对码");
-        input.setSingleLine(true);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle("配对 Mac")
-                .setMessage("从 Mac 的 PadPaste 菜单复制同步配对码，或导入配对文件。")
-                .setView(input)
-                .setPositiveButton("配对", null)
-                .setNeutralButton("导入文件", (d, which) -> activity.startActivityForResult(
-                        new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE),
-                        PICK_PAIRING))
-                .setNegativeButton("返回", null).create();
-        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-            if (pair(input.getText().toString())) dialog.dismiss();
-        }));
-        dialog.show();
-    }
-
-    boolean pair(String code) {
-        try {
-            link.pair(code);
-            SyncService.resumeMonitoring(activity);
-            toast("配对已保存");
-            return true;
-        } catch (Exception error) {
-            toast("无法读取配对码");
-            return false;
-        }
-    }
+    @Override public void status(boolean connected) {}
 
     @Override public boolean image(byte[] data) {
         try {

@@ -16,6 +16,8 @@ public final class MainActivity extends Activity {
     private static final String PEN_SENSITIVITY = "pen_sensitivity";
     private static final float MAX_PEN_SENSITIVITY = 2f;
     CanvasView canvas;
+    private FrameLayout canvasPage;
+    private FrameLayout syncPage;
     private DraftStore draftStore;
     private SharedPreferences toolSizes;
     private FanMenu menu;
@@ -39,18 +41,30 @@ public final class MainActivity extends Activity {
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0xFFFAFAF7));
+        FrameLayout root = new FrameLayout(this);
+        root.setFitsSystemWindows(true);
+        root.setMotionEventSplittingEnabled(false);
+        root.setBackgroundColor(0xFFFAFAF7);
+        canvasPage = new FrameLayout(this);
+        canvasPage.setMotionEventSplittingEnabled(false);
+        root.addView(canvasPage, new FrameLayout.LayoutParams(-1, -1));
+        syncPage = new FrameLayout(this);
+        syncPage.setId(R.id.sync_page);
+        root.addView(syncPage, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(root);
+        getFragmentManager().addOnBackStackChangedListener(this::updatePageVisibility);
+        updatePageVisibility();
+
         draftStore = DraftStore.get(this);
         toolSizes = getSharedPreferences("tool_sizes", MODE_PRIVATE);
         draftStore.open(ink -> {
             if (!isDestroyed() && !isFinishing()) build(ink);
         });
+        openSyncFromIntent(getIntent());
     }
 
     private void build(Ink ink) {
-        FrameLayout root = new FrameLayout(this);
-        root.setFitsSystemWindows(true);
-        root.setMotionEventSplittingEnabled(false);
-        root.setBackgroundColor(0xFFFAFAF7);
+        FrameLayout root = canvasPage;
         canvas = new CanvasView(this, ink);
         float density = getResources().getDisplayMetrics().density;
         canvas.width = toolSizes.getFloat("pen_width_dp", 2.3f) * density;
@@ -122,8 +136,6 @@ public final class MainActivity extends Activity {
                 if (canceled && canvas.selectionArmed()) canvas.clearSelection();
             }
         });
-        setContentView(root);
-        openSyncFromIntent(getIntent());
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -133,10 +145,32 @@ public final class MainActivity extends Activity {
     }
 
     private void openSyncFromIntent(Intent intent) {
-        if (questions == null || (!OPEN_SYNC.equals(intent.getAction()) && !intent.getBooleanExtra("open_sync", false))) return;
+        if (!OPEN_SYNC.equals(intent.getAction()) && !intent.getBooleanExtra("open_sync", false)) return;
         intent.removeExtra("open_sync");
         intent.setAction(Intent.ACTION_MAIN);
-        questions.settings();
+        openSync();
+    }
+
+    private void openSync() {
+        FragmentManager fragments = getFragmentManager();
+        if (fragments.findFragmentById(R.id.sync_page) != null || fragments.isStateSaved()) return;
+        resetPenButtons();
+        if (canvas != null) canvas.settleForSave();
+        fragments.beginTransaction().add(R.id.sync_page, new SyncFragment()).addToBackStack(null).commit();
+    }
+
+    private boolean syncVisible() {
+        return getFragmentManager().findFragmentById(R.id.sync_page) != null;
+    }
+
+    private void updatePageVisibility() {
+        boolean showSync = syncVisible();
+        canvasPage.setVisibility(showSync ? View.INVISIBLE : View.VISIBLE);
+        syncPage.setVisibility(showSync ? View.VISIBLE : View.GONE);
+    }
+
+    void receiveSettingChanged() {
+        if (questions != null) questions.updateSubscription();
     }
 
     private void menuCommand(int id) {
@@ -182,7 +216,7 @@ public final class MainActivity extends Activity {
                 canvas.overview();
                 break;
             case FanMenu.SYNC:
-                questions.settings();
+                openSync();
                 break;
             case FanMenu.COPY:
                 ink.copy();
@@ -232,6 +266,7 @@ public final class MainActivity extends Activity {
         boolean lower=legacy&&key==KeyEvent.KEYCODE_PAGE_DOWN,upper=legacy&&key==KeyEvent.KEYCODE_PAGE_UP;
         if(Build.VERSION.SDK_INT>=34){lower|=key==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY;upper|=key==KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY;}
         if((lower||upper)&&(event.getAction()==KeyEvent.ACTION_DOWN||event.getAction()==KeyEvent.ACTION_UP)){
+            if (syncVisible()) return true;
             boolean down=event.getAction()==KeyEvent.ACTION_DOWN;
             if(lower){
                 penButtons.lower(down,event.getEventTime(),event.isCanceled());
@@ -265,24 +300,6 @@ public final class MainActivity extends Activity {
         if (questions != null) questions.start();
     }
 
-    @Override protected void onActivityResult(int request, int result, Intent data) {
-        super.onActivityResult(request, result, data);
-        if (request != QuestionInbox.PICK_PAIRING || result != RESULT_OK || data == null
-                || data.getData() == null || questions == null) return;
-        try (java.io.InputStream stream = getContentResolver().openInputStream(data.getData())) {
-            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            int count;
-            while ((count = stream.read(buffer)) != -1) {
-                if (bytes.size() + count > 8192) throw new java.io.IOException("Pairing file too large");
-                bytes.write(buffer, 0, count);
-            }
-            questions.pair(bytes.toString("UTF-8"));
-        } catch (Exception error) {
-            Toast.makeText(this, "无法读取配对文件", Toast.LENGTH_SHORT).show();
-        }
-    }
-
     @Override protected void onPause() {
         resumed = false;
         if (questions != null) questions.stop();
@@ -303,7 +320,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public boolean dispatchKeyShortcutEvent(KeyEvent event) {
-        if (canvas != null && event.isCtrlPressed() && event.getKeyCode() == KeyEvent.KEYCODE_Z
+        if (canvas != null && !syncVisible() && event.isCtrlPressed() && event.getKeyCode() == KeyEvent.KEYCODE_Z
                 && event.getAction() == KeyEvent.ACTION_DOWN) {
             if (event.isShiftPressed()) {
                 canvas.clearSelection();
@@ -316,7 +333,8 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (menu == null) super.onBackPressed();
+        if (syncVisible()) getFragmentManager().popBackStack();
+        else if (menu == null) super.onBackPressed();
         else if (menu.isOpen()) menu.dismiss(true);
         else if (canvas.selectionArmed() || canvas.hasSelectionBox()) canvas.clearSelection();
         else super.onBackPressed();

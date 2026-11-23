@@ -40,6 +40,8 @@ public final class SyncService extends Service {
 
     public static boolean enabled(Context context) { return Config.prefs(context).getBoolean("enabled", false); }
 
+    public static String monitorStatus() { return SyncState.phase; }
+
     public static void setEnabled(Context context, boolean enabled) {
         SharedPreferences prefs = Config.prefs(context);
         SharedPreferences.Editor edit = prefs.edit().putBoolean("enabled", enabled);

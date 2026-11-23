@@ -80,6 +80,16 @@ public final class DuplexSync {
     public boolean connected() { Client current = client; return current != null && current.connected; }
     public boolean duplex() { Client current = client; return current != null && current.connected && current.duplex; }
 
+    public String connectedAddress() {
+        Client current = client;
+        Socket socket = current == null ? null : current.socket;
+        if (socket == null || !current.connected) return "";
+        InetAddress peer = socket.getInetAddress();
+        if (peer == null) return "";
+        String host = peer.getHostAddress();
+        return (host.contains(":") ? "[" + host + "]" : host) + ":" + socket.getPort();
+    }
+
     public synchronized void pair(String code) throws Exception {
         Pairing.parse(code);
         preferences.edit().putString("pairing", code.trim()).remove("last_address").apply();
