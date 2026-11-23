@@ -214,6 +214,7 @@ private final class QuestionPeer {
                 guard HMAC<SHA256>.isValidAuthenticationCode(answer, authenticating: self.message("tablet"),
                                                              using: self.key) else { self.close(); return }
                 self.deadline?.cancel()
+                if self.bluetooth { NSLog("PadPaste BLE peer authenticated") }
                 self.acceptsQuestions = !self.duplex
                 self.notice?(true)
                 guard !self.closed else { return }

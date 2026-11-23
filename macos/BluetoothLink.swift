@@ -10,7 +10,7 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
     private var manager: CBPeripheralManager?
     private var characteristic: CBMutableCharacteristic?
     private var psm: CBL2CAPPSM?
-    private var stream: BluetoothStream?
+    private var streams: [ObjectIdentifier: BluetoothStream] = [:]
 
     init(identity: Data, opened: @escaping (BluetoothStream) -> Void, status: @escaping (String) -> Void) {
         let bytes = [UInt8](identity.prefix(16))
@@ -24,8 +24,7 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
     }
 
     func stop() {
-        stream?.stop()
-        stream = nil
+        closeStreams()
         if let manager, manager.state == .poweredOn {
             manager.stopAdvertising()
             manager.removeAllServices()
@@ -33,6 +32,12 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
         }
         manager?.delegate = nil
         manager = nil
+    }
+
+    private func closeStreams() {
+        let active = streams.values
+        streams.removeAll()
+        active.forEach { $0.stop() }
     }
 
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
@@ -48,8 +53,7 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
         default: status("蓝牙备用 · 等待蓝牙")
         }
         if peripheral.state != .poweredOn {
-            stream?.stop()
-            stream = nil
+            closeStreams()
         }
     }
 
@@ -89,13 +93,16 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didOpen channel: CBL2CAPChannel?, error: Error?) {
         guard error == nil, let channel else { return }
-        guard stream == nil || stream?.closed == true else {
+        guard streams.count < 4 else {
             channel.inputStream.close()
             channel.outputStream.close()
             return
         }
         let link = BluetoothStream(channel)
-        stream = link
+        let identity = ObjectIdentifier(link)
+        streams[identity] = link
+        link.onClose = { [weak self] in self?.streams.removeValue(forKey: identity) }
+        NSLog("PadPaste BLE channel opened")
         opened(link)
     }
 }
@@ -121,7 +128,8 @@ final class BluetoothStream: NSObject, StreamDelegate {
     private var lastWrite = ProcessInfo.processInfo.systemUptime
     private var readBuffer = [UInt8](repeating: 0, count: 16_384)
     private var watch: Timer?
-    private(set) var closed = false
+    private var closed = false
+    var onClose: (() -> Void)?
 
     init(_ channel: CBL2CAPChannel) { self.channel = channel }
 
@@ -161,7 +169,9 @@ final class BluetoothStream: NSObject, StreamDelegate {
         switch event {
         case .hasBytesAvailable: readAvailable()
         case .hasSpaceAvailable: writeAvailable()
-        case .errorOccurred, .endEncountered: stop()
+        case .errorOccurred, .endEncountered:
+            NSLog("PadPaste BLE stream ended: %@", stream.streamError?.localizedDescription ?? "EOF")
+            stop()
         default: break
         }
     }
@@ -210,5 +220,7 @@ final class BluetoothStream: NSObject, StreamDelegate {
         writes.removeAll()
         failure?()
         failure = nil
+        onClose?()
+        onClose = nil
     }
 }
