@@ -48,7 +48,6 @@ public final class CanvasView extends View {
     private final InkBounds cachedInkBounds = new InkBounds(), movedInkBounds = new InkBounds();
     private long cachedInkRevision = -1;
     private final DashPathEffect lassoDashes = new DashPathEffect(new float[]{dp(5), dp(4)}, 0);
-    private final ArrayList<QuestionImage> visibleQuestions = new ArrayList<>();
     private final Runnable redrawQuestions = this::postInvalidateOnAnimation;
     private final RectF offerBounds = new RectF();
     private QuestionImage questionOffer;
@@ -391,23 +390,16 @@ public final class CanvasView extends View {
 
     private void drawQuestions(Canvas canvas, boolean collectForInk) {
         if (questionAssets == null) return;
-        visibleQuestions.clear();
+        boolean resizingPhoto = photoGesture != null && !photoGesture.offer
+                && photoGesture.resize && photoGesture.preview != null;
+        boolean resizingSelection = dragging && resizeContact;
         for (QuestionImage question : ink.questions) {
             if (questionOffer != null && question.id == offerImportId) continue;
             if (photoGesture != null && photoGesture.preview != null && photoGesture.original.id == question.id) {
                 question = photoGesture.preview;
             }
             questionDisplayBounds(question);
-            if (photoBounds.intersects(0, 0, getWidth(), getHeight())) visibleQuestions.add(question);
-        }
-        boolean zooming = (fingers && fingerCount == 2) || zoomAnimator != null;
-        boolean resizingPhoto = photoGesture != null && !photoGesture.offer
-                && photoGesture.resize && photoGesture.preview != null;
-        boolean resizingSelection = dragging && resizeContact;
-        int edgeLimit = QuestionAssets.edgeLimit(visibleQuestions.size());
-        int motionEdge = QuestionAssets.motionEdgeLimit(edgeLimit);
-        for (QuestionImage question : visibleQuestions) {
-            questionDisplayBounds(question);
+            if (!photoBounds.intersects(0, 0, getWidth(), getHeight())) continue;
             double edge = Math.max(question.width, question.height);
             // Keep the starting detail when shrinking and refine in the background when growing.
             if (resizingPhoto && question.id == photoGesture.original.id) {
@@ -415,15 +407,9 @@ public final class CanvasView extends View {
             } else if (resizingSelection && ink.selected.contains(question.id)) {
                 edge *= Math.max(1, selectionScale);
             }
-            int projected = (int) Math.ceil(edge * ink.view.scale * 1.4);
-            int requestedEdge = Math.max(1, Math.min(edgeLimit, projected));
-            Bitmap bitmap = zooming
-                    ? questionAssets.duringZoom(question.asset, requestedEdge, motionEdge, redrawQuestions)
-                    : questionAssets.visible(question.asset, requestedEdge, redrawQuestions);
-            if (bitmap != null) {
-                canvas.drawBitmap(bitmap, null, photoBounds, photoPaint);
-                if (collectForInk) questionInk.add(bitmap, photoBounds, 255);
-            }
+            int displayEdge = Math.max(1, (int) Math.ceil(edge * ink.view.scale));
+            questionAssets.draw(question.asset, canvas, photoBounds, displayEdge, getWidth(), getHeight(),
+                    photoPaint, collectForInk ? questionInk : null, redrawQuestions);
         }
         if (questionOffer != null) {
             updateOfferBounds(questionOffer);

@@ -15,6 +15,7 @@ import java.util.ArrayList;
 final class QuestionInk {
     private static final class Photo {
         final RectF bounds = new RectF();
+        final RectF destination = new RectF();
         Bitmap bitmap;
         int alpha;
     }
@@ -35,10 +36,15 @@ final class QuestionInk {
     }
 
     void add(Bitmap bitmap, RectF bounds, int alpha) {
+        add(bitmap, bounds, bounds, alpha);
+    }
+
+    void add(Bitmap bitmap, RectF bounds, RectF destination, int alpha) {
         if (count == photos.size()) photos.add(new Photo());
         Photo photo = photos.get(count++);
         photo.bitmap = bitmap;
         photo.bounds.set(bounds);
+        photo.destination.set(destination);
         photo.alpha = alpha;
     }
 
@@ -67,7 +73,14 @@ final class QuestionInk {
             if (!RectF.intersects(inkBounds, photo.bounds)) continue;
             invert.setAlpha(photo.alpha);
             // SRC_ATOP replaces ink color through the bitmap alpha and preserves the ink mask.
-            canvas.drawBitmap(photo.bitmap, null, photo.bounds, invert);
+            if (photo.bounds.equals(photo.destination)) {
+                canvas.drawBitmap(photo.bitmap, null, photo.destination, invert);
+            } else {
+                int save = canvas.save();
+                canvas.clipRect(photo.bounds);
+                canvas.drawBitmap(photo.bitmap, null, photo.destination, invert);
+                canvas.restoreToCount(save);
+            }
         }
     }
 
