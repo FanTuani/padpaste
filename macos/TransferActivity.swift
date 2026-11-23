@@ -2,7 +2,7 @@ import AppKit
 
 final class TransferActivity {
     private static let wifiDelay: TimeInterval = 0.5
-    private static let expandedWidth: CGFloat = 154
+    private static let expandedWidth: CGFloat = 69
     private let item: NSStatusItem
     private let originalIcon: NSImage?
     private let badge = TransferBadge()
@@ -70,7 +70,6 @@ final class TransferActivity {
         item.length = Self.expandedWidth
         item.button?.image = nil
         let label = direction == .sending ? "发送题图到平板" : "接收平板截图"
-        item.button?.toolTip = label
         item.button?.setAccessibilityLabel(label)
         badge.isHidden = false
         animate()
@@ -87,7 +86,6 @@ final class TransferActivity {
         direction = nil
         badge.isHidden = true
         item.button?.image = originalIcon
-        item.button?.toolTip = nil
         item.button?.setAccessibilityLabel("PadPaste 题图")
         item.length = NSStatusItem.squareLength
     }
@@ -174,10 +172,7 @@ private final class TransferBadge: NSView {
             .withSymbolConfiguration(config)?
             .draw(in: NSRect(x: 10, y: y - 5.5, width: 11, height: 11))
 
-        let title = direction == .sending ? "发送题图" : "接收截图"
-        draw(title, font: .systemFont(ofSize: 10, weight: .semibold), color: .labelColor, x: 26, y: y)
-
-        let track = NSRect(x: 74, y: y - 2, width: 42, height: 4)
+        let track = NSRect(x: 27, y: y - 2, width: 32, height: 4)
         NSColor.labelColor.withAlphaComponent(0.17).setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         if fraction > 0 {
@@ -185,15 +180,5 @@ private final class TransferBadge: NSView {
             let fill = NSRect(x: track.minX, y: track.minY, width: track.width * fraction, height: track.height)
             NSBezierPath(roundedRect: fill, xRadius: 2, yRadius: 2).fill()
         }
-        let percent = "\(Int(fraction * 100))%"
-        draw(percent, font: .monospacedDigitSystemFont(ofSize: 9, weight: .medium),
-             color: .secondaryLabelColor, x: 145, y: y, rightAligned: true)
-    }
-
-    private func draw(_ text: String, font: NSFont, color: NSColor, x: CGFloat, y: CGFloat,
-                      rightAligned: Bool = false) {
-        let label = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
-        let size = label.size()
-        label.draw(at: NSPoint(x: rightAligned ? x - size.width : x, y: y - size.height / 2))
     }
 }
