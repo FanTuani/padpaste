@@ -36,6 +36,8 @@ final class QuestionDetailCheck {
             AtomicReference<CanvasView> view = new AtomicReference<>();
             runner.runOnMainSync(() -> {
                 Ink ink = new Ink();
+                ink.view.x = 320;
+                ink.view.y = 200;
                 // Each photo has only a narrow strip on screen, with an additional tile boundary in view.
                 ink.questions.add(new QuestionImage(1, saved.get(), -2210, 0, 2400, 1600));
                 ink.questions.add(new QuestionImage(2, saved.get(), 420, 0, 2400, 1600));
