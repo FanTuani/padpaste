@@ -391,9 +391,12 @@ public final class DuplexSync {
                     continue;
                 }
                 if (fallback && bluetoothEnabled()) {
-                    boolean reconnectBluetooth = connectBluetooth();
+                    boolean cancelledOnBluetooth;
+                    do {
+                        cancelledOnBluetooth = connectBluetooth();
+                    } while (cancelledOnBluetooth && !stopped && bluetoothEnabled() && bluetoothRadioOn());
                     backoff = Math.max(backoff, 1800);
-                    if (reconnectBluetooth || preferredNetwork != null) {
+                    if (preferredNetwork != null) {
                         backoff = 450;
                         continue;
                     }
