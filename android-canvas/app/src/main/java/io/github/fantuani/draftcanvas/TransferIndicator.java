@@ -56,6 +56,11 @@ final class TransferIndicator extends View {
         DuplexSync.TransferProgress current = link.transferProgress();
         if (current == null) return;
         if (current != progress) {
+            if (now < current.displayAfter || (current.finished() && current.finishedAt() < current.displayAfter)) {
+                setVisibility(GONE);
+                if (!current.finished()) postDelayed(frame, current.displayAfter - now);
+                return;
+            }
             progress = current;
             shownAt = progressAt = now;
             finishedAt = 0;

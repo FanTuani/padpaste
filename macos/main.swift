@@ -53,6 +53,7 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
     private var receiver: FastScreenshotReceiver?
     private var questions: QuestionLink?
     private var statusItem: NSStatusItem?
+    private var transferActivity: TransferActivity?
     private var questionStatus: NSMenuItem?
     private var bluetoothStatus: NSMenuItem?
     private var bluetoothEnabled = UserDefaults.standard.bool(forKey: "bluetoothFallback")
@@ -94,6 +95,9 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
                 self?.questionConnected = receiving
                 self?.questionStatus?.title = route.map { "草稿纸已连接 · " + $0 } ?? "等待草稿纸连接"
             }
+            link.transferChanged = { [weak self] direction, update in
+                self?.transferActivity?.update(direction, update)
+            }
             link.bluetoothStatus = { [weak self] status in self?.bluetoothStatus?.title = status }
             link.start()
             link.setBluetoothEnabled(bluetoothEnabled)
@@ -123,6 +127,7 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "导出同步配对文件…", action: #selector(saveQuestionPairing), keyEquivalent: "").target = self
         item.menu = menu
         statusItem = item
+        transferActivity = TransferActivity(item: item)
     }
 
     @objc private func toggleBluetooth(_ item: NSMenuItem) {

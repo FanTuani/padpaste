@@ -6,6 +6,14 @@ import Network
 import SystemConfiguration
 import UniformTypeIdentifiers
 
+enum TransferDirection { case sending, receiving }
+
+enum TransferUpdate {
+    case started(bluetooth: Bool)
+    case progress(Double)
+    case finished(Bool)
+}
+
 final class QuestionLink {
     static let port: UInt16 = 5036
     static let byteLimit = 6 * 1024 * 1024
@@ -28,6 +36,7 @@ final class QuestionLink {
     private var outgoing: OutboundQuestion?
     private var bluetooth: BluetoothLink?
     var statusChanged: ((Bool, String?) -> Void)?
+    var transferChanged: ((TransferDirection, TransferUpdate) -> Void)?
     var bluetoothStatus: ((String) -> Void)?
     var receiveScreenshot: ((String, Data, @escaping (Bool) -> Void) -> Void)?
 
@@ -113,6 +122,7 @@ final class QuestionLink {
             guard let self, let peer else { return }
             if active {
                 let previous = self.tablet
+                if previous?.hasIncomingTransfer == true { self.publishTransfer(.receiving, .finished(false)) }
                 self.tablet = peer
                 if previous !== peer { previous?.close() }
             } else if self.tablet === peer {
@@ -124,7 +134,14 @@ final class QuestionLink {
             guard let self, let peer, self.tablet === peer else { return }
             self.publishAvailability()
             self.sendOnCurrentRoute()
-        }, receive: receiveScreenshot)
+        }, receive: receiveScreenshot, progress: { [weak self, weak peer] direction, update in
+            guard let self, let peer, self.tablet === peer else { return }
+            self.publishTransfer(direction, update)
+        })
+    }
+
+    private func publishTransfer(_ direction: TransferDirection, _ update: TransferUpdate) {
+        DispatchQueue.main.async { self.transferChanged?(direction, update) }
     }
 
     private func publishAvailability() {
@@ -189,6 +206,7 @@ final class QuestionLink {
         guard outgoing === question else { return }
         question.recovery?.cancel()
         outgoing = nil
+        publishTransfer(.sending, .finished(ok))
         question.finish(ok)
     }
 
@@ -253,11 +271,14 @@ private final class QuestionPeer {
     private var heartbeat: DispatchSourceTimer?
     private var availabilityChanged: (() -> Void)?
     private var receiveScreenshot: ((String, Data, @escaping (Bool) -> Void) -> Void)?
+    private var progressChanged: ((TransferDirection, TransferUpdate) -> Void)?
+    var hasIncomingTransfer: Bool { captureAnnounced || receivingCapture }
     private var receivingCapture = false
     private var captureAnnounced = false
     private var captureLength = 0
     private var capturePayload = Data()
     private var lastProgressReport: TimeInterval = 0
+    private var lastQuestionReport: TimeInterval = 0
     private var commitCapture: (() -> Void)?
     private var pendingQuestion: Data?
     private var switchingToNetwork = false
@@ -276,8 +297,10 @@ private final class QuestionPeer {
     }
 
     func start(lifecycle: @escaping (Bool) -> Void, availability: @escaping () -> Void,
-               receive: ((String, Data, @escaping (Bool) -> Void) -> Void)?) {
+               receive: ((String, Data, @escaping (Bool) -> Void) -> Void)?,
+               progress: @escaping (TransferDirection, TransferUpdate) -> Void) {
         notice = lifecycle
+        progressChanged = progress
         availabilityChanged = availability
         receiveScreenshot = receive
         // Keep the session alive until the transport closes, including the handshake.
@@ -359,11 +382,16 @@ private final class QuestionPeer {
         awaiting = finish
         expectedAck = box.tag
         timeOut()
-        write(withUnsafeBytes(of: &length) { Data($0) } + payload)
+        progressChanged?(.sending, .started(bluetooth: bluetooth))
+        write(withUnsafeBytes(of: &length) { Data($0) } + payload) { [weak self] in
+            self?.progressChanged?(.sending, .progress(0.94))
+        }
     }
 
     private func sendQuestion(_ image: Data) {
         deadline?.cancel()
+        progressChanged?(.sending, .started(bluetooth: bluetooth))
+        lastQuestionReport = 0
         if chunked {
             questionGeneration += 1
             sendQuestionChunk(image, from: 0, generation: questionGeneration)
@@ -371,7 +399,9 @@ private final class QuestionPeer {
         }
         if !bluetooth { timeOut() }
         writeFrame(1, image) { [weak self] in
-            if let self, self.bluetooth && self.awaiting != nil { self.timeOut() }
+            guard let self, self.awaiting != nil else { return }
+            self.progressChanged?(.sending, .progress(0.94))
+            if self.bluetooth { self.timeOut() }
         }
     }
 
@@ -383,7 +413,13 @@ private final class QuestionPeer {
         }
         let end = min(image.count, offset + (bluetooth ? 8192 : 65536))
         writeFrame(Self.questionChunk, image.subdata(in: offset..<end)) { [weak self] in
-            self?.sendQuestionChunk(image, from: end, generation: generation)
+            guard let self, generation == self.questionGeneration, self.awaiting != nil else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            if end == image.count || now - self.lastQuestionReport >= 0.08 {
+                self.lastQuestionReport = now
+                self.progressChanged?(.sending, .progress(0.94 * Double(end) / Double(image.count)))
+            }
+            self.sendQuestionChunk(image, from: end, generation: generation)
         }
     }
 
@@ -449,6 +485,8 @@ private final class QuestionPeer {
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastProgressReport >= 0.16 else { return }
         lastProgressReport = now
+        let size = captureLength - (chunked ? 29 : 0)
+        if size > 0 { progressChanged?(.receiving, .progress(0.94 * Double(capturePayload.count) / Double(size))) }
         var confirmed = UInt32(capturePayload.count).bigEndian
         writeFrame(Self.captureProgress, withUnsafeBytes(of: &confirmed) { Data($0) })
     }
@@ -487,6 +525,7 @@ private final class QuestionPeer {
                 }
             }
             captureAnnounced = true
+            progressChanged?(.receiving, .started(bluetooth: bluetooth))
             // A refusal queued behind this upload can arrive after the usual handshake deadline.
             if pendingQuestion != nil { deadline?.cancel() }
         case Self.captureChunk:
@@ -503,6 +542,7 @@ private final class QuestionPeer {
         case Self.cancelTransfer:
             guard chunked, content.count == 1, let direction = content.first else { close(); return }
             if direction == 2 {
+                if hasIncomingTransfer { progressChanged?(.receiving, .finished(false)) }
                 capturePayload = Data()
                 captureAnnounced = false
                 receivingCapture = false
@@ -555,7 +595,9 @@ private final class QuestionPeer {
               content.count > 1 + Int(count), content.count - 1 - Int(count) <= 50 * 1024 * 1024,
               let filename = String(data: content.dropFirst().prefix(Int(count)), encoding: .utf8),
               let receiveScreenshot else { finishCapture(false); return }
+        if !captureAnnounced { progressChanged?(.receiving, .started(bluetooth: bluetooth)) }
         receivingCapture = true
+        progressChanged?(.receiving, .progress(0.94))
         let body = content.dropFirst(1 + Int(count))
         let commit = { [weak self] in
             receiveScreenshot(filename, body) { [weak self] ok in
@@ -573,6 +615,7 @@ private final class QuestionPeer {
     }
 
     private func finishCapture(_ accepted: Bool) {
+        if hasIncomingTransfer { progressChanged?(.receiving, .finished(accepted)) }
         receivingCapture = false
         captureAnnounced = false
         captureLength = 0
@@ -597,6 +640,7 @@ private final class QuestionPeer {
     func close() {
         guard !closed else { return }
         closed = true
+        if hasIncomingTransfer { progressChanged?(.receiving, .finished(false)) }
         heartbeat?.cancel()
         heartbeat = nil
         deadline?.cancel()

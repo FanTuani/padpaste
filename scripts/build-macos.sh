@@ -6,7 +6,7 @@ SDK="$(xcrun --sdk macosx --show-sdk-path)"
 mkdir -p "$ROOT/build" "$APP/Contents/MacOS"
 xcrun swiftc -O -sdk "$SDK" -target arm64-apple-macosx12.0 -file-prefix-map "$ROOT=." \
   "$ROOT/macos/main.swift" "$ROOT/macos/AppConfiguration.swift" "$ROOT/macos/FastScreenshotReceiver.swift" \
-  "$ROOT/macos/QuestionLink.swift" "$ROOT/macos/BluetoothLink.swift" \
+  "$ROOT/macos/QuestionLink.swift" "$ROOT/macos/BluetoothLink.swift" "$ROOT/macos/TransferActivity.swift" \
   -o "$APP/Contents/MacOS/PadPaste" \
   -framework AppKit -framework QuartzCore -framework Network -framework ImageIO -framework CoreBluetooth
 python3 - "$ROOT" <<'PY'

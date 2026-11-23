@@ -60,30 +60,35 @@ public final class DuplexSync {
 
     public static final class TransferProgress {
         public final boolean uploading;
+        public final long displayAfter;
         private final int total;
         private volatile int transferred;
-        private volatile boolean finished;
+        private volatile long finishedAt;
         private volatile boolean successful;
         private volatile boolean cancelled;
         private volatile boolean committing;
         private volatile long activity = SystemClock.elapsedRealtime();
 
-        private TransferProgress(boolean uploading, int total) {
+        private TransferProgress(boolean uploading, int total, boolean bluetooth) {
             this.uploading = uploading;
             this.total = total;
+            displayAfter = SystemClock.uptimeMillis() + (bluetooth ? 0 : 500);
         }
 
-        public boolean finished() { return finished; }
+        public boolean finished() { return finishedAt != 0; }
+        public long finishedAt() { return finishedAt; }
         public boolean cancelled() { return cancelled; }
-        public boolean canCancel() { return !finished && !committing; }
+        public boolean canCancel() { return !finished() && !committing; }
 
         public float fraction() {
             return successful ? 1f : Math.min(.94f, (float) transferred / total * .94f);
         }
 
         private void finish(boolean success) {
-            successful = success;
-            finished = true;
+            if (finishedAt == 0) {
+                successful = success;
+                finishedAt = SystemClock.uptimeMillis();
+            }
         }
     }
 
@@ -743,7 +748,7 @@ public final class DuplexSync {
                         questionBytes[0] = QUESTION;
                         questionOffset = 1;
                     }
-                    download = new TransferProgress(false, questionLength);
+                    download = new TransferProgress(false, questionLength, link.bluetooth);
                     startProgress(download);
                 }
             }
@@ -848,7 +853,7 @@ public final class DuplexSync {
             }
             if (link.bluetooth && data.length > QUESTION_MAX) throw new IOException("蓝牙截图超过 6 MB");
             var pending = new CompletableFuture<Boolean>();
-            var progress = new TransferProgress(true, data.length + filename.length + 30);
+            var progress = new TransferProgress(true, data.length + filename.length + 30, link.bluetooth);
             synchronized (routing) {
                 if (link.routeChanged) throw new RouteChanged();
                 if (session != link || link.cancelledByUser) throw new IOException("正在切换同步连接");
