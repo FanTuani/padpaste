@@ -21,6 +21,8 @@ public final class CanvasView extends View {
     private static final float MAX_RAW_PEN_PRESSURE = 4095f;
     private static final float RESIZE_HANDLE_DP = 20f;
     private static final float PHOTO_RESIZE_HIT_RADIUS_DP = 24f;
+    private static final long SELECTION_MOTION_MS = 150, PASTE_IMAGE_FADE_MS = 135;
+    private static final int PASTE_INITIAL_ALPHA = 92;
     public final Ink ink;
     static final int DEFAULT_PEN_COLOR = 0xFF243137;
     public int mode=PEN,color=DEFAULT_PEN_COLOR;public float width,eraserSize,eraserSensitivity=2;
@@ -58,6 +60,10 @@ public final class CanvasView extends View {
     private long offerImportId;
     QuestionAssets questionAssets;
     private long selectedQuestionId;
+    private ValueAnimator selectionAnimator;
+    private float selectionProgress = 1;
+    private boolean pasteEntrance;
+    private int pasteImageAlpha = 255;
     private float photoMenuX, photoMenuY;
     private PhotoGesture photoGesture;
 
@@ -172,6 +178,7 @@ public final class CanvasView extends View {
     }
 
     void settleForSave() {
+        finishSelectionMotion();
         cancelPhotoGesture();
         stopZoomAnimation();
         lastTapTime = -1;
@@ -214,6 +221,7 @@ public final class CanvasView extends View {
     }
 
     private void discardSelection() {
+        finishSelectionMotion();
         selectionBox = null;
         ink.selected.clear();
     }
@@ -233,11 +241,12 @@ public final class CanvasView extends View {
 
     private void showPastedSelection(boolean preferPhoto) {
         if (preferPhoto && ink.selected.size() == 1) {
-            selectQuestion(ink.question(ink.selected.iterator().next()));
+            selectQuestion(ink.question(ink.selected.iterator().next()), true);
         } else {
             selectQuestion(null);
             double[] bounds = ink.selectionBounds();
             selectionBox = Lasso.rectangle(bounds[0], bounds[1], bounds[2], bounds[3]);
+            startSelectionMotion(true);
         }
         refresh();
     }
@@ -424,8 +433,11 @@ public final class CanvasView extends View {
                 edge *= Math.max(1, selectionScale);
             }
             int displayEdge = Math.max(1, (int) Math.ceil(edge * ink.view.scale));
+            boolean fading = pasteImageAlpha < 255 && (question.id == selectedQuestionId || ink.selected.contains(question.id));
+            if (fading) photoPaint.setAlpha(pasteImageAlpha);
             questionAssets.draw(question.asset, canvas, photoBounds, displayEdge, getWidth(), getHeight(),
                     photoPaint, collectForInk ? questionInk : null, onScreen, redrawQuestions);
+            if (fading) photoPaint.setAlpha(255);
         }
         if (questionOffer != null) {
             updateOfferBounds(questionOffer);
@@ -489,25 +501,78 @@ public final class CanvasView extends View {
     QuestionImage selectedQuestion() { return ink.question(selectedQuestionId); }
 
     void selectQuestion(QuestionImage image) {
+        selectQuestion(image, false);
+    }
+
+    private void selectQuestion(QuestionImage image, boolean pasted) {
+        long previous = selectedQuestionId;
         if (image != null) clearSelection();
         selectedQuestionId = image == null ? 0 : image.id;
+        if (image != null && previous != selectedQuestionId) startSelectionMotion(pasted);
+        else finishSelectionMotion();
         postInvalidateOnAnimation();
+    }
+
+    private void startSelectionMotion(boolean pasted) {
+        finishSelectionMotion();
+        if (!isAttachedToWindow() || !isShown() || !ValueAnimator.areAnimatorsEnabled()) return;
+        if (selectionAnimator == null) {
+            selectionAnimator = ValueAnimator.ofFloat(0, 1);
+            selectionAnimator.setDuration(SELECTION_MOTION_MS);
+            selectionAnimator.setInterpolator(new DecelerateInterpolator());
+            selectionAnimator.addUpdateListener(frame -> {
+                selectionProgress = (float) frame.getAnimatedValue();
+                if (pasteEntrance) {
+                    float fraction = Math.min(1, (float) frame.getCurrentPlayTime() / PASTE_IMAGE_FADE_MS);
+                    float fade = frame.getInterpolator().getInterpolation(fraction);
+                    pasteImageAlpha = Math.round(PASTE_INITIAL_ALPHA + (255 - PASTE_INITIAL_ALPHA) * fade);
+                    if (selectionProgress >= 1) pasteImageAlpha = 255;
+                }
+                postInvalidateOnAnimation();
+            });
+        }
+        pasteEntrance = pasted;
+        pasteImageAlpha = pasted ? PASTE_INITIAL_ALPHA : 255;
+        selectionProgress = 0;
+        selectionAnimator.start();
+    }
+
+    private void finishSelectionMotion() {
+        if (selectionAnimator != null && selectionAnimator.isStarted()) selectionAnimator.cancel();
+        if (selectionProgress < 1) postInvalidateOnAnimation();
+        selectionProgress = 1;
+        pasteImageAlpha = 255;
+        pasteEntrance = false;
+    }
+
+    // Apply the inset to the outline only. Hit testing always uses the final world bounds.
+    private float selectionInset(float span) {
+        if (selectionProgress >= 1) return 0;
+        float distance = Math.min(dp(pasteEntrance ? 3 : 2), Math.max(0, span) * .10f);
+        return -distance * (1 - selectionProgress);
+    }
+
+    private int selectionAlpha(int alpha) {
+        return Math.round(alpha * (.35f + .65f * selectionProgress));
     }
 
     private void drawQuestionSelection(Canvas c) {
         QuestionImage image = photoGesture != null && !photoGesture.offer && photoGesture.preview != null
                 ? photoGesture.preview : selectedQuestion();
         if (image != null) {
+            float left = screenX(image.x), top = screenY(image.y);
             float right = screenX(image.right()), bottom = screenY(image.bottom());
+            float insetX = selectionInset(right - left), insetY = selectionInset(bottom - top);
             paint.setColor(0xFF167B70);
+            paint.setAlpha(selectionAlpha(255));
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(dp(1.2f));
-            c.drawRect(screenX(image.x), screenY(image.y), right, bottom, paint);
-            drawResizeHandle(c, right, bottom);
+            c.drawRect(left + insetX, top + insetY, right - insetX, bottom - insetY, paint);
+            drawSelectionHandle(c, right - insetX, bottom - insetY);
         }
         if ((acceptDraggedOffer != null || offerAcceptedByDrag) && offerAlpha > 0) {
             updateOfferBounds(questionOffer);
-            drawResizeHandle(c, offerBounds.right, offerBounds.bottom);
+            drawResizeHandle(c, offerBounds.right, offerBounds.bottom, 255);
         }
     }
 
@@ -583,7 +648,7 @@ public final class CanvasView extends View {
         double scale = Math.min(ink.view.scale, Math.min(getWidth() * .82 / question.width,
                 getHeight() * .80 / question.height));
         double x = question.x + question.width / 2, y = question.y + question.height / 2;
-        animateCenteredCamera(x, y, scale);
+        animateCamera(x, y, scale, false);
     }
 
     private void drawLasso(Canvas canvas) {
@@ -598,6 +663,17 @@ public final class CanvasView extends View {
         double anchorY = dragging ? selectionBox.top : 0;
         double offsetX = dragging ? dragX : 0;
         double offsetY = dragging ? dragY : 0;
+        float insetX = 0, insetY = 0;
+        int outlineTransform = -1;
+        if (!marquee && selectionProgress < 1) {
+            float left = screenX(selectionBox.left), top = screenY(selectionBox.top);
+            float w = screenX(selectionBox.right) - left, h = screenY(selectionBox.bottom) - top;
+            insetX = selectionInset(w);
+            insetY = selectionInset(h);
+            outlineTransform = canvas.save();
+            canvas.scale(w > 0 ? 1 - 2 * insetX / w : 1, h > 0 ? 1 - 2 * insetY / h : 1,
+                    left + w / 2, top + h / 2);
+        }
         for (int i = 0; i < count; i += 2) {
             float x = screenX(anchorX + (points[i] - anchorX) * scale + offsetX);
             float y = screenY(anchorY + (points[i + 1] - anchorY) * scale + offsetY);
@@ -608,26 +684,43 @@ public final class CanvasView extends View {
             lassoPath.close();
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(0x11167b70);
+            paint.setAlpha(selectionAlpha(0x11));
             canvas.drawPath(lassoPath, paint);
         }
         paint.setStyle(Paint.Style.STROKE);
         paint.setColor(0xff167b70);
+        if (!marquee) paint.setAlpha(selectionAlpha(255));
         paint.setStrokeWidth(dp(1.2f));
         paint.setPathEffect(lassoDashes);
         canvas.drawPath(lassoPath, paint);
         paint.setPathEffect(null);
+        if (outlineTransform != -1) canvas.restoreToCount(outlineTransform);
         if (!marquee && !ink.selected.isEmpty()) {
-            drawResizeHandle(canvas, screenX(anchorX + (selectionBox.right - anchorX) * scale + offsetX),
-                    screenY(anchorY + (selectionBox.bottom - anchorY) * scale + offsetY));
+            drawSelectionHandle(canvas, screenX(anchorX + (selectionBox.right - anchorX) * scale + offsetX) - insetX,
+                    screenY(anchorY + (selectionBox.bottom - anchorY) * scale + offsetY) - insetY);
         }
     }
 
-    private void drawResizeHandle(Canvas c, float x, float y) {
+    private void drawSelectionHandle(Canvas c, float x, float y) {
+        if (selectionProgress >= 1) {
+            drawResizeHandle(c, x, y, 255);
+            return;
+        }
+        float scale = 1 - .13f * (1 - selectionProgress) * (1 - 3 * selectionProgress);
+        int save = c.save();
+        c.scale(scale, scale, x, y);
+        drawResizeHandle(c, x, y, selectionAlpha(255));
+        c.restoreToCount(save);
+    }
+
+    private void drawResizeHandle(Canvas c, float x, float y, int alpha) {
         float half = dp(RESIZE_HANDLE_DP / 2), tip = dp(4.5f), wing = dp(3);
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(0xff167b70);
+        paint.setAlpha(alpha);
         c.drawRoundRect(x - half, y - half, x + half, y + half, dp(5), dp(5), paint);
         paint.setColor(Color.WHITE);
+        paint.setAlpha(alpha);
         paint.setStrokeWidth(dp(1.4f));
         paint.setStrokeCap(Paint.Cap.ROUND);
         c.drawLine(x - tip, y - tip, x + tip, y + tip, paint);
@@ -661,7 +754,13 @@ public final class CanvasView extends View {
         drawStrokeShape(c, stroke, localLeft, localTop, localRight, localBottom);
         c.restore();
     }
-    @Override protected void onDetachedFromWindow(){stopZoomAnimation();if(raster!=null){raster.close();raster=null;}if(tiles!=null)tiles.clear();super.onDetachedFromWindow();}
+    @Override protected void onDetachedFromWindow() {
+        finishSelectionMotion();
+        stopZoomAnimation();
+        closeRaster();
+        if (tiles != null) tiles.clear();
+        super.onDetachedFromWindow();
+    }
     private float screenX(double x){return (float)((x-ink.view.x)*ink.view.scale+getWidth()/2.0);}private float screenY(double y){return (float)((y-ink.view.y)*ink.view.scale+getHeight()/2.0);}
     private void drawGrid(android.graphics.Canvas c){
         if (ink.view.scale < MIN_GRID_SCALE) return;
@@ -851,6 +950,7 @@ public final class CanvasView extends View {
                 selectionBox = completed;
                 ink.select(selectionBox);
                 mode = PEN;
+                if (!ink.selected.isEmpty()) startSelectionMotion(false);
             }
         }
         else commitLiveStroke();
@@ -915,10 +1015,16 @@ public final class CanvasView extends View {
 
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
-        if (!focused) nearPen = false;
+        if (!focused) {
+            nearPen = false;
+            finishSelectionMotion();
+        }
     }
+
     @Override public boolean onTouchEvent(MotionEvent e){
         getParent().requestDisallowInterceptTouchEvent(true);int action=e.getActionMasked(),index=e.getActionIndex();
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN
+                || action == MotionEvent.ACTION_CANCEL) finishSelectionMotion();
         if (action == MotionEvent.ACTION_CANCEL) {
             blockNavigation();
             ignoredPenId = -1;
@@ -1065,7 +1171,7 @@ public final class CanvasView extends View {
             lastTapTime = -1;
             if (canReturnFromDoubleTapZoom) {
                 canReturnFromDoubleTapZoom = false;
-                animateCenteredCamera(beforeDoubleTapX, beforeDoubleTapY, 1);
+                animateCamera(beforeDoubleTapX, beforeDoubleTapY, 1, false);
             } else if (ink.view.scale == 1) {
                 beforeDoubleTapX = ink.view.x;
                 beforeDoubleTapY = ink.view.y;
@@ -1082,24 +1188,45 @@ public final class CanvasView extends View {
     }
 
     private void animateZoomTo(float x, float y, double targetScale) {
-        animateCamera(wx(x), wy(y), targetScale, x - getWidth() / 2.0, y - getHeight() / 2.0);
+        animateCamera(wx(x), wy(y), targetScale, false);
     }
 
-    private void animateCenteredCamera(double x, double y, double scale) {
-        animateCamera(x, y, scale, (x - ink.view.x) * ink.view.scale, (y - ink.view.y) * ink.view.scale);
-    }
-
-    private void animateCamera(double targetX, double targetY, double targetScale, double offsetX, double offsetY) {
-        double startingScale = ink.view.scale;
+    private void animateCamera(double targetX, double targetY, double targetScale, boolean overview) {
+        double startingX = ink.view.x, startingY = ink.view.y, startingScale = ink.view.scale;
+        if (startingX == targetX && startingY == targetY && startingScale == targetScale) return;
+        if (!ValueAnimator.areAnimatorsEnabled() || getWidth() == 0 || getHeight() == 0) {
+            ink.view.x = targetX;
+            ink.view.y = targetY;
+            ink.view.scale = targetScale;
+            zoomSettling = true;
+            refreshOverlay();
+            return;
+        }
         double logRatio = Math.log(startingScale / targetScale);
+        double offsetX = (targetX - startingX) * startingScale;
+        double offsetY = (targetY - startingY) * startingScale;
         ValueAnimator animation = ValueAnimator.ofFloat(0f, 1f);
         animation.setDuration(240);
         animation.setInterpolator(new DecelerateInterpolator(1.65f));
         animation.addUpdateListener(frame -> {
-            double remaining = 1 - (float) frame.getAnimatedValue();
+            double t = (float) frame.getAnimatedValue();
+            if (t == 0) return;
+            double remaining = 1 - t;
             ink.view.scale = targetScale * Math.exp(remaining * logRatio);
-            ink.view.x = targetX - remaining * offsetX / ink.view.scale;
-            ink.view.y = targetY - remaining * offsetY / ink.view.scale;
+            if (t == 1) {
+                ink.view.x = targetX;
+                ink.view.y = targetY;
+            } else if (overview) {
+                // Move the old center out (or the destination in) along a straight screen-space path.
+                double weight = targetScale < startingScale
+                        ? t * (targetScale / ink.view.scale)
+                        : 1 - remaining * (startingScale / ink.view.scale);
+                ink.view.x = (1 - weight) * startingX + weight * targetX;
+                ink.view.y = (1 - weight) * startingY + weight * targetY;
+            } else {
+                ink.view.x = targetX - remaining * offsetX / ink.view.scale;
+                ink.view.y = targetY - remaining * offsetY / ink.view.scale;
+            }
             invalidate();
         });
         animation.addListener(new AnimatorListenerAdapter() {
@@ -1108,15 +1235,17 @@ public final class CanvasView extends View {
             @Override public void onAnimationCancel(Animator ended) { canceled = true; }
 
             @Override public void onAnimationEnd(Animator ended) {
-                if (raster != null) raster.endZoom(!canceled);
+                if (raster != null && zoomPreview != null) raster.endZoom(!canceled);
+                if (overview) zoomSettling = !canceled;
                 zoomAnimator = null;
                 zoomPreview = null;
                 changed.run();
                 postInvalidateOnAnimation();
             }
         });
-        zoomSettling = true;
-        if (Build.VERSION.SDK_INT >= 29) {
+        // An overview can span the whole document. Draw only the visible tiles while travelling.
+        zoomSettling = !overview;
+        if (!overview && Build.VERSION.SDK_INT >= 29) {
             if (raster == null) raster = new AsyncInkTiles(this::postInvalidateOnAnimation);
             raster.prepareZoom(ink, cameraAt(targetX, targetY, targetScale));
             zoomPreview = new ZoomPreview(targetX, targetY, Math.min(startingScale, targetScale), offsetX, offsetY);
@@ -1210,15 +1339,12 @@ public final class CanvasView extends View {
             bottom = Math.max(bottom, image.bottom());
         }
         if (!ink.hasContent()) {
-            ink.view.x = ink.view.y = 0;
-            ink.view.scale = 1;
-        } else {
-            ink.view.x = (left + right) / 2;
-            ink.view.y = (top + bottom) / 2;
-            double fit = Math.min(getWidth() * .75 / Math.max(50, right - left),
-                    getHeight() * .60 / Math.max(50, bottom - top));
-            ink.view.scale = Math.max(.0001, Math.min(8, fit));
+            animateCamera(0, 0, 1, true);
+            return;
         }
-        refresh();
+        double fit = Math.min(getWidth() * .75 / Math.max(50, right - left),
+                getHeight() * .60 / Math.max(50, bottom - top));
+        animateCamera(left * .5 + right * .5, top * .5 + bottom * .5,
+                Math.max(.0001, Math.min(8, fit)), true);
     }
 }

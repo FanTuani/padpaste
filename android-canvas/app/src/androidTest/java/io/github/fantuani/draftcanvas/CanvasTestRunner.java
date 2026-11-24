@@ -203,11 +203,12 @@ public final class CanvasTestRunner extends Instrumentation {
         }
     }
 
-    private void checkQuestionTouch() {
+    private void checkQuestionTouch(Activity host) {
         Ink document = new Ink();
-        CanvasView view = new CanvasView(getTargetContext(), document);
-        new android.widget.FrameLayout(getTargetContext()).addView(view);
+        CanvasView view = new CanvasView(host, document);
+        host.addContentView(view, new android.widget.FrameLayout.LayoutParams(512, 512));
         view.layout(0, 0, 512, 512);
+        check(view.isAttachedToWindow() && view.isShown(), "selection feedback needs a visible test canvas");
         QuestionImage image = new QuestionImage(document.nextId(), "test", -120, -80, 110, 80);
         document.questions.add(image);
         int finger = MotionEvent.TOOL_TYPE_FINGER;
@@ -276,6 +277,14 @@ public final class CanvasTestRunner extends Instrumentation {
         check(anchored != null && anchored.x + anchored.width / 2 == -260
                         && anchored.y + anchored.height / 2 == 85 && !view.hasSelectionBox(),
                 "tool paste must select a single photo at its world anchor");
+        // No frame elapses between paste and touch. The final image bounds must already respond.
+        event(view, finger, MotionEvent.ACTION_DOWN, 26, 341);
+        event(view, finger, MotionEvent.ACTION_MOVE, 76, 366);
+        event(view, finger, MotionEvent.ACTION_UP, 76, 366);
+        QuestionImage moved = view.selectedQuestion();
+        check(moved != null && moved.id == anchored.id && moved.x == anchored.x + 50
+                        && moved.y == anchored.y + 25 && document.view.x == -30,
+                "dragging a freshly pasted photo must move the copy immediately");
         document.selected.add(document.strokes.get(0).id);
         document.copy();
         view.pasteAt(70, -100);
@@ -514,6 +523,54 @@ public final class CanvasTestRunner extends Instrumentation {
         }
     }
 
+    private void checkOverview() throws InterruptedException {
+        CanvasView[] views = new CanvasView[2];
+        runOnMainSync(() -> {
+            for (int i = 0; i < views.length; i++) {
+                CanvasView view = new CanvasView(getTargetContext(), new Ink());
+                new android.widget.FrameLayout(getTargetContext()).addView(view);
+                view.layout(0, 0, 1000, 700);
+                views[i] = view;
+            }
+            Ink ink = views[0].ink;
+            ink.add(new Ink.Stroke(ink.nextId(), CanvasView.DEFAULT_PEN_COLOR, 2, -298, -148,
+                    new float[]{0, 0, 1, 20, 10, 1}));
+            ink.questions.add(new QuestionImage(ink.nextId(), "test", 600, 50, 100, 200));
+            views[0].overview();
+        });
+        CanvasView content = views[0], empty = views[1];
+        try {
+            // Combined bounds are (-300, -150) to (700, 250).
+            awaitZoom(content, .75, 200, 50);
+            double[] interrupted = new double[3];
+            runOnMainSync(() -> {
+                Viewport camera = content.ink.view;
+                camera.x = -1200;
+                camera.y = 300;
+                camera.scale = 2;
+                content.overview();
+                if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                    check(camera.x < 0, "overview must start from the current camera");
+                }
+                int finger = MotionEvent.TOOL_TYPE_FINGER;
+                event(content, finger, MotionEvent.ACTION_DOWN, 200, 350);
+                interrupted[0] = camera.scale;
+                interrupted[1] = camera.x - 80 / camera.scale;
+                interrupted[2] = camera.y;
+                event(content, finger, MotionEvent.ACTION_MOVE, 280, 350);
+                event(content, finger, MotionEvent.ACTION_UP, 280, 350);
+                empty.ink.view.x = 700;
+                empty.ink.view.scale = 2;
+                empty.overview();
+            });
+            // Let another complete overview elapse before checking for a stale final frame.
+            awaitZoom(empty, 1, 0, 0);
+            awaitZoom(content, interrupted[0], interrupted[1], interrupted[2]);
+        } finally {
+            runOnMainSync(() -> { content.closeRaster(); empty.closeRaster(); });
+        }
+    }
+
     private void awaitZoom(CanvasView view, double scale, double x, double y) throws InterruptedException {
         boolean[] matches = {false};
         long deadline = SystemClock.uptimeMillis() + 1500;
@@ -523,7 +580,7 @@ public final class CanvasTestRunner extends Instrumentation {
             if (matches[0]) return;
             Thread.sleep(16);
         } while (SystemClock.uptimeMillis() < deadline);
-        throw new AssertionError("wrong viewport after double tap, expected " + scale + " at " + x + ", " + y);
+        throw new AssertionError("wrong viewport, expected " + scale + " at " + x + ", " + y);
     }
 
     @android.annotation.TargetApi(29)
@@ -548,7 +605,6 @@ public final class CanvasTestRunner extends Instrumentation {
             checkGridAndPenWidth();
             checkLiveTip(v);
             checkVariableWidth();
-            checkQuestionTouch();
             checkPendingQuestionResize();
             checkInvertedQuestionInk();
             checkPenPressureThreshold();
@@ -685,11 +741,15 @@ public final class CanvasTestRunner extends Instrumentation {
             pen(v, MotionEvent.ACTION_UP, 850, 850);
             check(selectionTaps[0] == 3, "an empty box must be tappable for paste");
             v.clearSelection();
-            v.overview();
-            check(Math.abs(d.view.x - 590) < .1 && Math.abs(d.view.y - 730) < .1,
-                    "overview must center existing ink");
-            v.refresh();
         });
+        Activity host = startActivitySync(new Intent(getTargetContext(), MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            runOnMainSync(() -> checkQuestionTouch(host));
+        } finally {
+            runOnMainSync(host::finish);
+        }
+        checkOverview();
         checkDoubleTapRoundTrip();
         result.putString("stream","PASS: pen ink, image selection menu and edits, double-tap zoom round trip, canceled ink rejection, finger pan, lasso select, move, copy/paste, undo/redo, two-finger zoom and 100% snap, exact thick-edge erasure pixels, partial erase, eraser pressure, fixed-width ink, erase undo/cancel, GPU tile edge/undo pixels, hover anchor, armed selection, pen tap and drag, silent finger taps\n");finish(Activity.RESULT_OK,result);
     }catch(Throwable e){result.putString("stream","FAIL: "+e);finish(Activity.RESULT_CANCELED,result);}}

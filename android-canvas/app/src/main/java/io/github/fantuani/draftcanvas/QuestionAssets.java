@@ -118,7 +118,7 @@ final class QuestionAssets {
             if (bitmap != null) {
                 if (onScreen) {
                     canvas.drawBitmap(bitmap, null, bounds, paint);
-                    if (ink != null) ink.add(bitmap, bounds, 255);
+                    if (ink != null) ink.add(bitmap, bounds, paint.getAlpha());
                 }
                 return;
             }
@@ -135,7 +135,7 @@ final class QuestionAssets {
         if (divisor >= previewDivisor || fallback == null) loadPreview(asset, displayEdge, ready);
         if (onScreen && fallback != null) {
             canvas.drawBitmap(fallback, null, bounds, paint);
-            if (ink != null) ink.add(fallback, bounds, 255);
+            if (ink != null) ink.add(fallback, bounds, paint.getAlpha());
         }
     }
 
@@ -178,7 +178,7 @@ final class QuestionAssets {
                 canvas.clipRect(tileBounds);
                 canvas.drawBitmap(bitmap, null, target, paint);
                 canvas.restoreToCount(save);
-                if (ink != null) ink.add(bitmap, tileBounds, target, 255);
+                if (ink != null) ink.add(bitmap, tileBounds, target, paint.getAlpha());
             }
         }
         if (missing != null) loadTiles(asset, divisor, missing, ready);
