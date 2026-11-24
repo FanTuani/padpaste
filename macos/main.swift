@@ -18,9 +18,11 @@ final class EdgeGlowView: NSView {
         // as the screen-sized image, including at the intersections of the edges.
         let border = Int(ceil(fade))
         let side = border * 2 + 1
-        let levels: [UInt8] = (0...border).map { distance in
-            let t = min(1, CGFloat(distance) / fade)
-            return UInt8(((1 - t * t * (3 - 2 * t)) * 0.78 * 255).rounded())
+        var levels = [UInt8](repeating: 0, count: border + 1)
+        for distance in 0...border {
+            let t = min(1.0, Double(distance) / Double(fade))
+            let opacity = 1.0 - t * t * (3.0 - 2.0 * t)
+            levels[distance] = UInt8((opacity * 0.78 * 255.0).rounded())
         }
         var pixels = Data(count: side * side * 4)
         pixels.withUnsafeMutableBytes { buffer in
