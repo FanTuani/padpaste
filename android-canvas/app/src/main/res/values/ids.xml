@@ -1,0 +1,5 @@
+<resources>
+    <item type="id" name="sync_page"/>
+    <item type="id" name="sync_scroll"/>
+    <item type="id" name="sync_pairing_code"/>
+</resources>

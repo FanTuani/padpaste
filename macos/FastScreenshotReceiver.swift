@@ -4,9 +4,11 @@ import ImageIO
 import CryptoKit
 
 final class FastScreenshotReceiver {
+    static let tabletOrigin = NSPasteboard.PasteboardType("io.github.fantuani.padpaste.tablet-origin")
     private var listener: NWListener?
     private var discovery: NWListener?
     private let queue = DispatchQueue(label: "tablet.screenshot.receive", qos: .userInitiated)
+    private var pending: [String: [(Int, String) -> Void]] = [:]
     private var committed = Set<String>()
     private var trace: [[String: Any]] = []
     let onReceived: (String) -> Void
@@ -58,8 +60,41 @@ final class FastScreenshotReceiver {
         udp.start(queue: queue)
     }
 
+    func receive(name: String, body: Data, completion: @escaping (Bool) -> Void) {
+        guard name.range(of: Self.screenshotName, options: .regularExpression) != nil else {
+            completion(false)
+            return
+        }
+        queue.async {
+            self.accept(name: name, body: body, began: Date().timeIntervalSince1970 * 1000) { code, _ in
+                completion(code == 200)
+            }
+        }
+    }
+
+    fileprivate static let screenshotName = "^Screenshot_[A-Za-z0-9._-]{1,220}\\.(jpg|jpeg|png|webp)$"
+
     private func accept(name: String, body: Data, began: Double, respond: @escaping (Int, String) -> Void) {
-        if committed.contains(name) { respond(200, "duplicate"); return }
+        let original = name.hasSuffix(".jpg") ? String(name.dropLast(4)) : name
+        let identity = original.range(of: Self.screenshotName, options: .regularExpression) == nil ? name : original
+        if committed.contains(identity) { respond(200, "duplicate"); return }
+        if pending[identity] != nil {
+            pending[identity]?.append(respond)
+            return
+        }
+        pending[identity] = [respond]
+        publish(name: name, body: body, began: began) { [weak self] code, reason in
+            guard let self else { return }
+            if code == 200 {
+                if self.committed.count >= 1000 { self.committed.removeAll(keepingCapacity: true) }
+                self.committed.insert(identity)
+            }
+            let waiters = self.pending.removeValue(forKey: identity)
+            waiters?.forEach { $0(code, reason) }
+        }
+    }
+
+    private func publish(name: String, body: Data, began: Double, respond: @escaping (Int, String) -> Void) {
         let bodyDone = Date().timeIntervalSince1970 * 1000
         guard let source = CGImageSourceCreateWithData(body as CFData, nil),
               CGImageSourceGetStatus(source) == .statusComplete,
@@ -75,6 +110,7 @@ final class FastScreenshotReceiver {
             guard let self else { respond(503, "stopped"); return }
             let item = NSPasteboardItem()
             item.setData(tiff, forType: .tiff)
+            item.setString("1", forType: Self.tabletOrigin)
             if ["jpg", "jpeg"].contains(extensionName) {
                 item.setData(body, forType: NSPasteboard.PasteboardType("public.jpeg"))
             } else if extensionName == "png" {
@@ -82,12 +118,14 @@ final class FastScreenshotReceiver {
             }
             let pb = NSPasteboard.general
             pb.clearContents()
-            guard pb.writeObjects([item]) else { respond(500, "clipboard write failed"); return }
+            guard pb.writeObjects([item]) else {
+                self.queue.async { respond(500, "clipboard write failed") }
+                return
+            }
             let published = Date().timeIntervalSince1970 * 1000
             self.onReceived(name)
             self.queue.async {
-                if self.committed.count >= 1000 { self.committed.removeAll(keepingCapacity: true) }
-                self.committed.insert(name)
+                respond(200, "clipboard ready")
                 self.trace.append(["name": name, "bytes": body.count, "connectionMs": began,
                     "bodyDoneMs": bodyDone, "imageReadyMs": prepared, "clipboardMs": published,
                     "receiveMs": bodyDone - began, "decodeMs": prepared - bodyDone,
@@ -95,7 +133,6 @@ final class FastScreenshotReceiver {
                 self.trace = Array(self.trace.suffix(30))
                 let traceURL = AppConfiguration.dataDirectory.appendingPathComponent("latency-trace.json")
                 if let data = try? JSONSerialization.data(withJSONObject: self.trace, options: .sortedKeys) { try? data.write(to: traceURL, options: .atomic) }
-                respond(200, "clipboard ready")
             }
         }
     }
@@ -156,7 +193,7 @@ private final class ScreenshotRequest {
                           let size = Int(headers["content-length"] ?? ""), size > 0, size <= 50*1024*1024 else { respond(413, "invalid size"); return }
                     let path = String(request[1])
                     guard path.hasPrefix("/screenshot/"), let filename=String(path.dropFirst(12)).removingPercentEncoding,
-                          filename.range(of: "^Screenshot_[A-Za-z0-9._-]{1,220}\\.(jpg|jpeg|png|webp)$", options: .regularExpression) != nil else { respond(400, "invalid filename"); return }
+                          filename.range(of: FastScreenshotReceiver.screenshotName, options: .regularExpression) != nil else { respond(400, "invalid filename"); return }
                     name=filename;length=size;buffer.removeSubrange(..<split.upperBound)
                 } else if buffer.count > 8192 { respond(431, "header too large"); return }
             }

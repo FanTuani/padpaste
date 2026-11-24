@@ -60,7 +60,17 @@ public final class MainActivity extends Activity {
         int available=(int)(getResources().getDisplayMetrics().widthPixels/getResources().getDisplayMetrics().density);boolean wide=available>=840;
         content=column();content.setPadding(dp(wide?44:28),dp(28),dp(wide?44:28),dp(32));shell.addView(content,new LinearLayout.LayoutParams(dp(Math.min(available,1056)),-2));
         LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brand=text("PadPaste",27,INK,true);brand.setLetterSpacing(-0.035f);header.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        boolean embedded = !getPackageName().equals("io.github.fantuani.padpaste");
+        if (embedded) {
+            Button back = button("‹", false);
+            back.setTextSize(28);
+            back.setPadding(0, 0, 0, 0);
+            back.setContentDescription("返回草稿纸");
+            back.setBackgroundColor(Color.TRANSPARENT);
+            back.setOnClickListener(v -> finish());
+            header.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        }
+        TextView brand=text(embedded?"截图同步":"PadPaste",27,INK,true);brand.setLetterSpacing(-0.035f);header.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
         Button settings=button("设置",false);settings.setBackgroundColor(Color.TRANSPARENT);header.addView(settings,new LinearLayout.LayoutParams(dp(76),dp(48)));settings.setOnClickListener(v->showSettings());content.addView(header);
         gap(content,wide?44:28);
         LinearLayout connection=new LinearLayout(this);connection.setOrientation(wide?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);connection.setGravity(Gravity.CENTER_VERTICAL);

@@ -16,8 +16,10 @@ import java.util.*;
 
 public final class SyncService extends Service {
     static final String STOP="io.github.fantuani.padpaste.STOP";
+    private static final String BLUETOOTH_CHANGED = "io.github.fantuani.padpaste.BLUETOOTH_CHANGED";
     static final String RECONFIGURE="io.github.fantuani.padpaste.RECONFIGURE";
     static final int NOTIFICATION=21;
+    public static final String STATE_ACTION = SyncState.ACTION;
     private static final class Capture {
         String name,path; long noticed,next;
         Capture(String n,String p){name=n;path=p;noticed=SystemClock.elapsedRealtime();}
@@ -37,15 +39,43 @@ public final class SyncService extends Service {
     private final Runnable scanLoop=new Runnable(){public void run(){if(!SyncState.running)return;scan();worker.postDelayed(this,5000);}};
     private final Runnable processLoop=this::process;
 
-    static boolean filesAllowed(Context c){
+    public static boolean enabled(Context context) { return Config.prefs(context).getBoolean("enabled", false); }
+
+    public static String monitorStatus() { return SyncState.phase; }
+
+    public static void setEnabled(Context context, boolean enabled) {
+        SharedPreferences prefs = Config.prefs(context);
+        SharedPreferences.Editor edit = prefs.edit().putBoolean("enabled", enabled);
+        if (enabled && !prefs.getBoolean("enabled", false)) edit.putLong("baseline", System.currentTimeMillis());
+        edit.apply();
+        if (enabled) resumeMonitoring(context);
+        else context.stopService(new Intent(context, SyncService.class));
+    }
+
+    public static void resumeMonitoring(Context context) {
+        if (enabled(context) && !SyncState.running && filesAllowed(context) && configured(context)) {
+            context.startForegroundService(new Intent(context, SyncService.class));
+        }
+    }
+
+    public static void refreshBluetoothForegroundType(Context context) {
+        if (Build.VERSION.SDK_INT >= 34 && SyncState.running) {
+            context.startService(new Intent(context, SyncService.class).setAction(BLUETOOTH_CHANGED));
+        }
+    }
+
+    private static boolean configured(Context context) {
+        return DuplexSync.get(context).paired() || new Config(context).valid();
+    }
+
+    public static boolean filesAllowed(Context c){
         return Build.VERSION.SDK_INT>=30 ? Environment.isExternalStorageManager() : c.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED;
     }
     @Override public void onCreate(){
         super.onCreate();
         NotificationChannel channel=new NotificationChannel("sync","截图同步",NotificationManager.IMPORTANCE_LOW);
         channel.setDescription("显示截图监控是否正在运行");getSystemService(NotificationManager.class).createNotificationChannel(channel);
-        Notification n=notification("正在恢复截图监控…");
-        if(Build.VERSION.SDK_INT>=34)startForeground(NOTIFICATION,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);else startForeground(NOTIFICATION,n);
+        promoteForeground("正在恢复截图监控…");
         thread=new HandlerThread("PadPasteTransfer");thread.start();worker=new Handler(thread.getLooper());
         connectivity=getSystemService(ConnectivityManager.class);
         networkCallback=new ConnectivityManager.NetworkCallback(){
@@ -57,9 +87,13 @@ public final class SyncService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&STOP.equals(intent.getAction())){Config.prefs(this).edit().putBoolean("enabled",false).apply();stopSelf();return START_NOT_STICKY;}
         if(!Config.prefs(this).getBoolean("enabled",false)){stopSelf();return START_NOT_STICKY;}
-        if(!filesAllowed(this)||!new Config(this).valid()){
+        if(!filesAllowed(this)||!configured(this)){
             SyncState.phase=!filesAllowed(this)?"需要文件访问权限":"需要配置配对信息";SyncState.publish(this);stopSelf();return START_NOT_STICKY;
         }
+        if (intent != null && BLUETOOTH_CHANGED.equals(intent.getAction())) {
+            promoteForeground("仅剪贴板 · 传输后清理平板截图");
+        }
+        DuplexSync.get(this).monitor(true);
         boolean reload=intent!=null&&RECONFIGURE.equals(intent.getAction());
         worker.post(()->{if(!initialized||reload)initialize();});
         return START_STICKY;
@@ -93,15 +127,22 @@ public final class SyncService extends Service {
         if(!SyncState.running||config==null)return;String name=ImageFormats.canonical(source);if(name==null)return;
         File file=new File(config.directory,source);
         if(!file.isFile()||file.lastModified()<Config.prefs(this).getLong("baseline",0))return;
-        if(ledger.handled(name)){ledger.finish(name,cleanCapture(name,file.getAbsolutePath()));return;}
-        Capture capture=writing.get(name);
-        if(capture==null){capture=new Capture(name,file.getAbsolutePath());ledger.begin(name,capture.path);writing.put(name,capture);}
+        Capture capture = writing.get(name);
+        if (capture == null) {
+            if (ledger.handled(name)) {
+                ledger.finish(name, cleanCapture(name, file.getAbsolutePath()));
+                return;
+            }
+            capture = new Capture(name, file.getAbsolutePath());
+            ledger.begin(name, capture.path);
+            writing.put(name, capture);
+        }
         capture.path=file.getAbsolutePath();capture.next=SystemClock.elapsedRealtime()+(ready?0:40);schedule(ready?0:40);
     }
     private void scan(){
-        File[] files=new File(config.directory).listFiles();if(files==null)return;
-        for(File file:files)if(file.isFile())notice(file.getName(),false);
-        schedule(0);
+        String[] names = new File(config.directory).list();
+        if (names != null) for (String name : names) notice(name, false);
+        if (!writing.isEmpty()) schedule(0);
     }
     private void schedule(long delay){if(worker==null||!SyncState.running)return;worker.removeCallbacks(processLoop);worker.postDelayed(processLoop,Math.max(0,delay));}
     private void process(){
@@ -109,19 +150,23 @@ public final class SyncService extends Service {
         Capture capture=Collections.min(writing.values(),Comparator.comparingLong(c->c.next));
         long now=SystemClock.elapsedRealtime();if(capture.next>now){schedule(capture.next-now);return;}
         File file=new File(capture.path);if(!file.isFile())file=new File(config.directory,capture.name);
-        boolean uploaded=false,attempted=false;long duration=0;String error="";
+        boolean uploaded=false,attempted=false,conflict=false,cancelled=false;long duration=0;String error="";
         try{
-            long size=file.length(),modified=file.lastModified();
-            if(size>50L*1024*1024)throw new IOException("图片超过 50 MB");
-            byte[] data=size>0?Files.readAllBytes(file.toPath()):new byte[0];
-            boolean complete=size>0&&file.length()==size&&file.lastModified()==modified&&ImageFormats.complete(data);
-            if(!complete){
+            byte[] data = ImageFormats.readComplete(file);
+            if (data == null) {
                 if(now-capture.noticed<2000){capture.next=now+60;schedule(60);return;}
                 throw new IOException("系统未完成截图写入");
             }
             SyncState.phase="正在上传";SyncState.publish(this);attempted=true;
-            long started=SystemClock.elapsedRealtime();MacClient.upload(config,capture.name,data);duration=SystemClock.elapsedRealtime()-started;uploaded=true;
-        }catch(Exception e){error=friendly(e);}
+            long started=SystemClock.elapsedRealtime();
+            DuplexSync link = DuplexSync.get(this);
+            if (link.duplex() || (link.paired() && (!link.connected() || !config.valid()))) {
+                link.upload(capture.name, data);
+            } else {
+                MacClient.upload(config, capture.name, data);
+            }
+            duration=SystemClock.elapsedRealtime()-started;uploaded=true;
+        }catch(Exception e){error=friendly(e);conflict=e instanceof DuplexSync.TransferConflict;cancelled=e instanceof DuplexSync.TransferCancelled;}
         // Every capture gets one network attempt. Success or failure both end in cleanup.
         boolean cleaned=cleanCapture(capture.name,capture.path);
         ledger.finish(capture.name,cleaned);writing.remove(capture.name);SyncState.phase="正在监控";
@@ -129,8 +174,12 @@ public final class SyncService extends Service {
             Config.prefs(this).edit().putLong("last_upload",System.currentTimeMillis()).putLong("last_duration",duration).putString("last_error",cleaned?"":"平板截图清理失败").apply();
             SyncState.connection(this,true,"");
             popup(cleaned?"已同步："+duration+"ms":"截图已同步，但平板截图清理失败");
+        }else if(cancelled&&cleaned){
+            // The indicator already showed the cancellation.
+        }else if(conflict&&cleaned){
+            popup(error);
         }else{
-            if(attempted)SyncState.connection(this,false,error);
+            if(attempted&&!conflict&&!cancelled)SyncState.connection(this,false,error);
             reportFailure(error,cleaned);
         }
         SyncState.publish(this);schedule(0);
@@ -159,17 +208,39 @@ public final class SyncService extends Service {
     private void popup(String message){ui.post(()->{if(feedback!=null)feedback.cancel();feedback=Toast.makeText(this,message,Toast.LENGTH_SHORT);feedback.show();});}
     private void checkConnection(){
         if(config==null)return;
+        DuplexSync link = DuplexSync.get(this);
+        if (link.paired()) {
+            SyncState.connection(this, link.connected(), "");
+            return;
+        }
         try{MacClient.check(config);SyncState.connection(this,true,"");}
         catch(Exception e){SyncState.connection(this,false,friendly(e));}
     }
     static String friendly(Exception e){String s=e.getMessage();return s==null?e.getClass().getSimpleName():s;}
     private Notification notification(String text){
-        PendingIntent open=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+        Intent openApp = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (openApp == null) openApp = new Intent(this, MainActivity.class);
+        openApp.putExtra("open_sync", true);
+        PendingIntent open=PendingIntent.getActivity(this,0,openApp,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop=PendingIntent.getService(this,1,new Intent(this,SyncService.class).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        return new Notification.Builder(this,"sync").setSmallIcon(io.github.fantuani.padpaste.R.drawable.ic_padpaste).setContentTitle("PadPaste").setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(new Notification.Action.Builder(null,"暂停",stop).build()).build();
+        return new Notification.Builder(this,"sync").setSmallIcon(getApplicationInfo().icon).setContentTitle("PadPaste").setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(new Notification.Action.Builder(null,"暂停",stop).build()).build();
+    }
+    private void promoteForeground(String text) {
+        Notification notification = notification(text);
+        if (Build.VERSION.SDK_INT < 34) {
+            startForeground(NOTIFICATION, notification);
+            return;
+        }
+        int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+        DuplexSync link = DuplexSync.get(this);
+        if (link.bluetoothEnabled() && link.bluetoothAllowed()) {
+            type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+        }
+        startForeground(NOTIFICATION, notification, type);
     }
     private void updateNotification(String text){getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(text));}
     @Override public void onDestroy(){
+        DuplexSync.get(this).monitor(false);
         SyncState.running=false;SyncState.phase="已暂停";SyncState.publish(this);
         if(observer!=null)observer.stopWatching();
         if(connectivity!=null&&networkCallback!=null)try{connectivity.unregisterNetworkCallback(networkCallback);}catch(RuntimeException ignored){}
