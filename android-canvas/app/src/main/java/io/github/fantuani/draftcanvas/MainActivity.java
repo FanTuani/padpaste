@@ -330,11 +330,8 @@ public final class MainActivity extends Activity {
     @Override public boolean dispatchKeyShortcutEvent(KeyEvent event) {
         if (canvas != null && !syncVisible() && event.isCtrlPressed() && event.getKeyCode() == KeyEvent.KEYCODE_Z
                 && event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (event.isShiftPressed()) {
-                canvas.clearSelection();
-                canvas.ink.redo();
-                canvas.refresh();
-            } else canvas.undo();
+            if (event.isShiftPressed()) canvas.redo();
+            else canvas.undo();
             return true;
         }
         return super.dispatchKeyShortcutEvent(event);

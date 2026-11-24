@@ -248,10 +248,15 @@ public final class CanvasView extends View {
     void setPenPressureThreshold(int level) {
         penPressureThreshold = Math.max(0, Math.min(MAX_PEN_PRESSURE_THRESHOLD, level)) / MAX_RAW_PEN_PRESSURE;
     }
-    public void undo() {
+    public void undo() { applyHistory(false); }
+    void redo() { applyHistory(true); }
+
+    private void applyHistory(boolean redo) {
+        cancelPhotoGesture();
+        finishContactForMenu();
         clearSelection();
-        if (penId != -1) finishPen();
-        ink.undo();
+        if (redo) ink.redo();
+        else ink.undo();
         refresh();
     }
     void questionAdded() {

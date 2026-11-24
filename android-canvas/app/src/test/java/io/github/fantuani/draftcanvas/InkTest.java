@@ -30,6 +30,69 @@ public class InkTest {
     @Test public void zoomKeepsFocusAndWorksAtDistantCoordinates(){Viewport v=new Viewport();v.x=1e11;v.y=-1e11;double x=v.worldX(231,1000),y=v.worldY(178,700);v.zoom(9.3,231,178,1000,700);assertEquals(x,v.worldX(231,1000),.001);assertEquals(y,v.worldY(178,700),.001);}
     @Test public void selectionMoveCopyPasteUndoIsIndependent(){Ink d=new Ink();d.add(stroke(d));d.select(90,190,140,240);d.copy();d.move(80,-20);assertEquals(180,d.strokes.get(0).x,0);d.paste(1000,700);assertEquals(2,d.strokes.size());assertEquals(124,d.strokes.get(1).x,0);d.undo();assertEquals(1,d.strokes.size());d.undo();assertEquals(100,d.strokes.get(0).x,0);d.redo();assertEquals(180,d.strokes.get(0).x,0);}
     @Test public void canceledEraseRestoresStrokeAndCommittedEraseUndoes(){Ink d=new Ink();d.add(stroke(d));d.begin();d.strokes.clear();d.cancel();assertEquals(1,d.strokes.size());d.begin();d.strokes.clear();d.commit();d.undo();assertEquals(1,d.strokes.size());}
+    @Test public void penHistorySurvivesInterleavedSnapshotUndoRedo() {
+        Ink ink = new Ink();
+        Ink.Stroke first = stroke(ink);
+        ink.add(first);
+        ink.selected.add(first.id);
+        ink.move(17, -9);
+        Ink.Stroke moved = ink.strokes.get(0);
+        Ink.Stroke last = stroke(ink);
+        ink.add(last);
+        ink.undo();
+        assertEquals(1, ink.strokes.size());
+        assertSame(moved, ink.strokes.get(0));
+        ink.undo();
+        assertSame(first, ink.strokes.get(0));
+        ink.undo();
+        assertTrue(ink.strokes.isEmpty());
+        ink.redo();
+        ink.redo();
+        ink.redo();
+        assertSame(moved, ink.strokes.get(0));
+        assertSame(last, ink.strokes.get(1));
+        ink.undo();
+        ink.add(stroke(ink));
+        assertFalse(ink.canRedo());
+    }
+
+    @Test public void penHistoryKeepsOneHundredEditsAndCommitsAnOpenTransaction() {
+        Ink ink = new Ink();
+        for (int i = 0; i < 103; i++) ink.add(stroke(ink));
+        for (int i = 0; i < 100; i++) ink.undo();
+        assertFalse(ink.canUndo());
+        assertEquals(3, ink.strokes.size());
+        Ink.Stroke first = ink.strokes.get(0);
+        ink.begin();
+        ink.strokes.clear();
+        ink.add(stroke(ink));
+        assertEquals(1, ink.strokes.size());
+        ink.undo();
+        assertEquals(3, ink.strokes.size());
+        assertSame(first, ink.strokes.get(0));
+    }
+
+    @Test public void replayDuringEraseFinishesTheEditBeforeUsingHistory() {
+        Ink ink = new Ink();
+        Ink.Stroke dot = new Ink.Stroke(ink.nextId(), 0, 2, 20, 20, new float[]{0,0,1});
+        ink.add(dot);
+        ink.add(stroke(ink));
+        ink.undo(); // A redo is available until the next edit.
+        ink.begin();
+        assertTrue(ink.erase(20, 20, 20, 20, 4));
+        ink.redo();
+        assertFalse(ink.hasOpenEdit());
+        assertTrue(ink.strokes.isEmpty());
+        assertFalse(ink.canRedo());
+        ink.undo();
+        assertSame(dot, ink.strokes.get(0));
+        assertTrue(ink.erase(20, 20, 20, 20, 4)); // Standalone model edit.
+        ink.undo();
+        assertSame(dot, ink.strokes.get(0));
+        ink.undo();
+        assertTrue(ink.strokes.isEmpty());
+    }
+
     @Test public void rectangleRejectsEmptyPartOfStrokeBounds(){Ink d=new Ink();d.add(stroke(d));d.select(99,227,103,231);assertTrue(d.selected.isEmpty());d.select(108,211,113,219);assertEquals(1,d.selected.size());}
     @Test public void hitTestDoesNotEraseWholeBoundingBox(){Ink d=new Ink();Ink.Stroke s=stroke(d);assertTrue(s.hit(110,215,2));assertFalse(s.hit(100,230,2));}
 

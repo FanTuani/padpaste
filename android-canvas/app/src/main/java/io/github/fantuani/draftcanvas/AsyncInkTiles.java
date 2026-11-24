@@ -289,7 +289,7 @@ final class AsyncInkTiles {
             phase.haloIndexed = false;
             phase.removeOutside(nearby);
         }
-        if (visibleReady()) fallbacks.clear();
+        if (!fallbacks.isEmpty() && visibleReady()) fallbacks.clear();
         if (!isolatedInk && !ops.isEmpty()) updatePaperShader();
 
         for (int row = phase.visible.top; row <= phase.visible.bottom; row++) {
@@ -378,27 +378,31 @@ final class AsyncInkTiles {
     }
 
     private void drawTile(Canvas canvas, Tile tile, boolean fillMissing, InkTiles.Drawer drawModel) {
+        boolean drawModelNow = tile.sequence < tile.drawModelUntil;
+        if (tile.sequence < 0 && !drawModelNow) {
+            if (!containsInk(tile)) {
+                tile.sequence = sequence;
+                return;
+            }
+            drawModelNow = fillMissing;
+        }
+        // Clean, transparent tiles have nothing to record on the canvas.
+        if (!tile.needsRender() && tile.bitmap == null) return;
+
         float left = camera.sx(tile.left), top = camera.sy(tile.top);
         float right = camera.sx(tile.right), bottom = camera.sy(tile.bottom);
         canvas.save();
         canvas.clipRect(left, top, right, bottom);
-        if (tile.sequence < tile.drawModelUntil || (fillMissing && tile.sequence < 0 && containsInk(tile))) {
-            // A move removes ink from its old position and can uncover earlier strokes.
-            // Draw current vectors until this tile contains that revision.
+        if (drawModelNow) {
             drawModel.draw(canvas, (int) Math.floor(left), (int) Math.floor(top),
                     (int) Math.ceil(right), (int) Math.ceil(bottom));
             canvas.restore();
             return;
         }
         if (tile.sequence < 0) {
-            if (containsInk(tile)) {
-                drawFallback(canvas, tile);
-                canvas.restore();
-                return;
-            } else {
-                // Empty space never needs a bitmap or a trip through the worker.
-                tile.sequence = sequence;
-            }
+            drawFallback(canvas, tile);
+            canvas.restore();
+            return;
         }
         drawBitmap(canvas, tile);
         drawOps(canvas, tile);

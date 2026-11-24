@@ -632,7 +632,7 @@ public final class DuplexSync {
 
         private void receive(Session link, byte[] frame) throws Exception {
             switch (frame[0]) {
-                case QUESTION -> receiveQuestion(link, frame);
+                case QUESTION -> receiveQuestion(link, frame, 1);
                 case QUESTION_START -> requestQuestion(link, frame);
                 case QUESTION_CHUNK -> receiveQuestionChunk(link, frame);
                 case CANCEL_ACK -> {
@@ -744,9 +744,8 @@ public final class DuplexSync {
                     questionLength = size + 29;
                     questionId = id;
                     if (link.chunked) {
-                        questionBytes = new byte[size + 1];
-                        questionBytes[0] = QUESTION;
-                        questionOffset = 1;
+                        questionBytes = new byte[size];
+                        questionOffset = 0;
                     }
                     download = new TransferProgress(false, questionLength, link.bluetooth);
                     startProgress(download);
@@ -771,16 +770,16 @@ public final class DuplexSync {
                     || questionOffset + frame.length - 1 > questionBytes.length) throw new IOException("无效的题图数据");
             System.arraycopy(frame, 1, questionBytes, questionOffset, frame.length - 1);
             questionOffset += frame.length - 1;
-            download.transferred = questionOffset - 1;
-            if (questionOffset == questionBytes.length && !download.cancelled) receiveQuestion(link, questionBytes);
+            download.transferred = questionOffset;
+            if (questionOffset == questionBytes.length && !download.cancelled) receiveQuestion(link, questionBytes, 0);
         }
 
-        private void receiveQuestion(Session link, byte[] frame) throws Exception {
-            if (link.transferLock && (download == null || frame.length + 28 != questionLength)) {
+        private void receiveQuestion(Session link, byte[] data, int offset) throws Exception {
+            if (link.transferLock && (download == null || data.length - offset + 29 != questionLength)) {
                 throw new IOException("题图未获传输许可");
             }
             TransferProgress current = download;
-            boolean accepted = deliver(Arrays.copyOfRange(frame, 1, frame.length), () -> {
+            boolean accepted = deliver(offset == 0 ? data : Arrays.copyOfRange(data, offset, data.length), () -> {
                 synchronized (routing) {
                     if (current == null) return !stopped;
                     if (current.cancelled || session != link || link.routeChanged) return false;
@@ -877,14 +876,15 @@ public final class DuplexSync {
                     }
                     if (link.chunked) {
                         if (!progress.cancelled) {
-                            link.send(CAPTURE_CHUNK, Arrays.copyOfRange(header, 1, header.length));
+                            byte[] kind = {(byte) CAPTURE_CHUNK};
+                            link.sendParts(kind, header, 1, header.length - 1, null);
                             int chunk = link.bluetooth ? 8192 : 65536;
                             for (int offset = 0; offset < data.length && !progress.cancelled && !link.routeChanged; offset += chunk) {
-                                link.send(CAPTURE_CHUNK, Arrays.copyOfRange(data, offset, Math.min(offset + chunk, data.length)));
+                                link.sendParts(kind, data, offset, Math.min(chunk, data.length - offset), null);
                             }
                         }
                     } else {
-                        link.sendParts(header, data, progress);
+                        link.sendParts(header, data, 0, data.length, progress);
                     }
                 } catch (Exception failure) {
                     if (!progress.cancelled) {
@@ -999,17 +999,18 @@ public final class DuplexSync {
         }
 
         void send(int kind, byte[] data) throws Exception {
-            sendParts(new byte[]{(byte) kind}, data, null);
+            sendParts(new byte[]{(byte) kind}, data, 0, data.length, null);
         }
 
-        synchronized void sendParts(byte[] header, byte[] data, TransferProgress progress) throws Exception {
+        synchronized void sendParts(byte[] header, byte[] data, int dataOffset, int dataLength,
+                                    TransferProgress progress) throws Exception {
             byte[] nonce = new byte[12];
             RANDOM.nextBytes(nonce);
             Cipher cipher = cipher(Cipher.ENCRYPT_MODE, nonce, "tablet-frame");
             // Android's GCM provider can buffer update() output until doFinal().
             // Finish encryption before writing a frame header to the live connection.
             byte[] prefix = cipher.update(header);
-            byte[] sealed = cipher.doFinal(data);
+            byte[] sealed = cipher.doFinal(data, dataOffset, dataLength);
             int prefixSize = prefix == null ? 0 : prefix.length;
             writing = true;
             if (bluetooth) lastWrite = SystemClock.elapsedRealtime();

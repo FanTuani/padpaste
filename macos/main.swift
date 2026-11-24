@@ -3,47 +3,48 @@ import CoreGraphics
 import QuartzCore
 
 final class EdgeGlowView: NSView {
-    private var cachedImage: CGImage?
-    private var cachedSize = NSSize.zero
+    private var cachedFade: CGFloat = 0
     override var isOpaque: Bool { false }
     override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() {
-        prepare()
-        layer?.contents = cachedImage
-        layer?.contentsGravity = .resize
-    }
 
-    func prepare() {
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        if cachedImage == nil || cachedSize != bounds.size {
-            cachedSize = bounds.size
-            // A single distance field avoids brighter overlaps at the corners.
-            let w = Int(ceil(bounds.width)), h = Int(ceil(bounds.height))
-            let fadeWidth = min(180.0, Double(min(w, h)) * 0.16)
-            var pixels = [UInt8](repeating: 0, count: w * h * 4)
-            for y in 0..<h {
-                for x in 0..<w {
-                    let distance = Double(min(x, w - 1 - x, y, h - 1 - y))
-                    let t = min(1.0, distance / fadeWidth)
-                    let alpha = UInt8(((1 - t * t * (3 - 2 * t)) * 0.78 * 255).rounded())
-                    let i = (y * w + x) * 4
-                    pixels[i] = alpha; pixels[i + 1] = alpha; pixels[i + 2] = alpha; pixels[i + 3] = alpha
+    override func updateLayer() {
+        guard let layer, bounds.width > 0, bounds.height > 0 else { return }
+        // The texture is measured in screen points, including on Retina displays.
+        layer.contentsScale = 1
+        let fade = min(180, min(ceil(bounds.width), ceil(bounds.height)) * 0.16)
+        guard cachedFade != fade || layer.contents == nil else { return }
+
+        // Only the transparent center stretches. The four corners retain the same distance field
+        // as the screen-sized image, including at the intersections of the edges.
+        let border = Int(ceil(fade))
+        let side = border * 2 + 1
+        let levels: [UInt8] = (0...border).map { distance in
+            let t = min(1, CGFloat(distance) / fade)
+            return UInt8(((1 - t * t * (3 - 2 * t)) * 0.78 * 255).rounded())
+        }
+        var pixels = Data(count: side * side * 4)
+        pixels.withUnsafeMutableBytes { buffer in
+            let colors = buffer.bindMemory(to: UInt32.self)
+            for y in 0..<side {
+                let vertical = min(y, side - 1 - y)
+                for x in 0..<side {
+                    let alpha = levels[min(vertical, x, side - 1 - x)]
+                    colors[y * side + x] = UInt32(alpha) * 0x01010101
                 }
             }
-            let data = Data(pixels) as CFData
-            if let provider = CGDataProvider(data: data) {
-                cachedImage = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
-                    bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
-                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                    provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
-            }
         }
-    }
-    func updateLayerImage() {
-        prepare()
-        wantsLayer = true
-        layer?.contents = cachedImage
-        layer?.contentsGravity = .resize
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let image = CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32,
+                  bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { return }
+        let unit = 1 / CGFloat(side)
+        layer.contentsGravity = .resize
+        layer.contentsCenter = CGRect(x: CGFloat(border) * unit, y: CGFloat(border) * unit,
+                                      width: unit, height: unit)
+        layer.contents = image
+        cachedFade = fade
     }
 }
 
@@ -88,11 +89,9 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
             questions = link
             setupQuestionMenu()
             lastClipboardChange = NSPasteboard.general.changeCount
-            let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkClipboard() }
-            RunLoop.main.add(timer, forMode: .common)
-            clipboardTimer = timer
             link.statusChanged = { [weak self] receiving, route in
                 self?.questionConnected = receiving
+                self?.updateClipboardTimer()
                 self?.questionStatus?.title = route.map { "草稿纸已连接 · " + $0 } ?? "等待草稿纸连接"
             }
             link.transferChanged = { [weak self] direction, update in
@@ -164,6 +163,20 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         item.state = watchClipboard ? .on : .off
         lastClipboardChange = NSPasteboard.general.changeCount
         UserDefaults.standard.set(!watchClipboard, forKey: "pauseQuestionClipboard")
+        updateClipboardTimer()
+    }
+
+    private func updateClipboardTimer() {
+        guard watchClipboard && questionConnected else {
+            clipboardTimer?.invalidate()
+            clipboardTimer = nil
+            return
+        }
+        guard clipboardTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkClipboard() }
+        timer.tolerance = 0.025
+        RunLoop.main.add(timer, forMode: .common)
+        clipboardTimer = timer
     }
 
     private func checkClipboard() {
@@ -250,7 +263,8 @@ final class ScreenshotHUD: NSObject, NSApplicationDelegate {
         panel.ignoresMouseEvents = true
         panel.isReleasedWhenClosed = false
         let glow = EdgeGlowView(frame: bounds)
-        glow.updateLayerImage()
+        glow.wantsLayer = true
+        glow.updateLayer()
         glow.layer?.opacity = 0
         panel.contentView = glow
         return panel

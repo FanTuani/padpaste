@@ -19,6 +19,7 @@ final class DraftStore {
     private static final int MAGIC = 0x44524146; // DRAF
     private static final int VERSION = 3;
     private static final long SAVE_DELAY_MS = 240;
+    private static final long MAX_VIEWPORT_SAVE_DELAY_MS = 2_000;
     private static DraftStore instance;
 
     static DraftStore get(Context context) {
@@ -30,12 +31,14 @@ final class DraftStore {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Consumer<Ink>> callbacks = new ArrayList<>();
-    private final Runnable autosave = this::flush;
+    private final Runnable autosave = this::saveIfSettled;
     private final Object writeLock = new Object();
     private Snapshot pending;
     private boolean writing;
     private volatile boolean failed;
     private boolean saveScheduled;
+    private long firstScheduledAt;
+    private double scheduledX, scheduledY, scheduledScale;
     private Ink ink;
     private long requestedRevision;
     private double requestedX, requestedY, requestedScale;
@@ -66,7 +69,28 @@ final class DraftStore {
     void observe() {
         if (changed() && !saveScheduled) {
             saveScheduled = true;
-            main.postDelayed(autosave, SAVE_DELAY_MS);
+            firstScheduledAt = SystemClock.uptimeMillis();
+            scheduleCheck();
+        }
+    }
+
+    private void scheduleCheck() {
+        scheduledX = ink.view.x;
+        scheduledY = ink.view.y;
+        scheduledScale = ink.view.scale;
+        long deadline = Math.min(firstScheduledAt + MAX_VIEWPORT_SAVE_DELAY_MS, SystemClock.uptimeMillis() + SAVE_DELAY_MS);
+        main.postAtTime(autosave, deadline);
+    }
+
+    private void saveIfSettled() {
+        // A pan only moves the camera, but the on-disk format also contains every stroke.
+        // Coalesce moving frames; content edits and lifecycle flushes keep their usual priority.
+        if (ink.revision == requestedRevision && !failed
+                && (scheduledX != ink.view.x || scheduledY != ink.view.y || scheduledScale != ink.view.scale)
+                && SystemClock.uptimeMillis() < firstScheduledAt + MAX_VIEWPORT_SAVE_DELAY_MS) {
+            scheduleCheck();
+        } else {
+            flush();
         }
     }
 

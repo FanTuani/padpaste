@@ -127,15 +127,22 @@ public final class SyncService extends Service {
         if(!SyncState.running||config==null)return;String name=ImageFormats.canonical(source);if(name==null)return;
         File file=new File(config.directory,source);
         if(!file.isFile()||file.lastModified()<Config.prefs(this).getLong("baseline",0))return;
-        if(ledger.handled(name)){ledger.finish(name,cleanCapture(name,file.getAbsolutePath()));return;}
-        Capture capture=writing.get(name);
-        if(capture==null){capture=new Capture(name,file.getAbsolutePath());ledger.begin(name,capture.path);writing.put(name,capture);}
+        Capture capture = writing.get(name);
+        if (capture == null) {
+            if (ledger.handled(name)) {
+                ledger.finish(name, cleanCapture(name, file.getAbsolutePath()));
+                return;
+            }
+            capture = new Capture(name, file.getAbsolutePath());
+            ledger.begin(name, capture.path);
+            writing.put(name, capture);
+        }
         capture.path=file.getAbsolutePath();capture.next=SystemClock.elapsedRealtime()+(ready?0:40);schedule(ready?0:40);
     }
     private void scan(){
-        File[] files=new File(config.directory).listFiles();if(files==null)return;
-        for(File file:files)if(file.isFile())notice(file.getName(),false);
-        schedule(0);
+        String[] names = new File(config.directory).list();
+        if (names != null) for (String name : names) notice(name, false);
+        if (!writing.isEmpty()) schedule(0);
     }
     private void schedule(long delay){if(worker==null||!SyncState.running)return;worker.removeCallbacks(processLoop);worker.postDelayed(processLoop,Math.max(0,delay));}
     private void process(){
@@ -145,11 +152,8 @@ public final class SyncService extends Service {
         File file=new File(capture.path);if(!file.isFile())file=new File(config.directory,capture.name);
         boolean uploaded=false,attempted=false,conflict=false,cancelled=false;long duration=0;String error="";
         try{
-            long size=file.length(),modified=file.lastModified();
-            if(size>50L*1024*1024)throw new IOException("图片超过 50 MB");
-            byte[] data=size>0?Files.readAllBytes(file.toPath()):new byte[0];
-            boolean complete=size>0&&file.length()==size&&file.lastModified()==modified&&ImageFormats.complete(data);
-            if(!complete){
+            byte[] data = ImageFormats.readComplete(file);
+            if (data == null) {
                 if(now-capture.noticed<2000){capture.next=now+60;schedule(60);return;}
                 throw new IOException("系统未完成截图写入");
             }

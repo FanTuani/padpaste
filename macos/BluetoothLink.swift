@@ -1,5 +1,5 @@
 import CoreBluetooth
-import Foundation
+import AppKit
 
 // CoreBluetooth and its streams run on the main run loop. The session callbacks run on the sync queue.
 final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
@@ -8,6 +8,15 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
     private let opened: (BluetoothStream) -> Void
     private let status: (String) -> Void
     private var manager: CBPeripheralManager?
+    private var powerObservers: [NSObjectProtocol] = []
+    private var sleeping = false
+    private var stopped = false
+    private var publishing = false
+    private var interrupted = false
+    private var retiring = false
+    private var cleanupDeadline: DispatchWorkItem?
+    private var retry: DispatchWorkItem?
+    private var retryDelay: TimeInterval = 2
     private var characteristic: CBMutableCharacteristic?
     private var psm: CBL2CAPPSM?
     private var streams: [ObjectIdentifier: BluetoothStream] = [:]
@@ -20,18 +29,93 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
         self.opened = opened
         self.status = status
         super.init()
+        let center = NSWorkspace.shared.notificationCenter
+        powerObservers = [
+            center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.willSleep()
+            },
+            center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.didWake()
+            }
+        ]
+        startManagerIfNeeded()
+    }
+
+    private func startManagerIfNeeded() {
+        guard !sleeping, !stopped, retry == nil, manager == nil else { return }
         manager = CBPeripheralManager(delegate: self, queue: nil)
     }
 
+    private func willSleep() {
+        sleeping = true
+        retry?.cancel()
+        retry = nil
+        // If CoreBluetooth reported power loss first, keep the PSM for cleanup when power returns.
+        if manager?.state == .poweredOn { retireManager() }
+    }
+
+    private func didWake() {
+        sleeping = false
+        startManagerIfNeeded()
+    }
+
     func stop() {
+        stopped = true
+        let center = NSWorkspace.shared.notificationCenter
+        powerObservers.forEach { center.removeObserver($0) }
+        powerObservers.removeAll()
+        retry?.cancel()
+        retry = nil
+        retireManager()
+    }
+
+    private func retireManager() {
+        guard let manager, !retiring else { return }
+        retiring = true
         closeStreams()
-        if let manager, manager.state == .poweredOn {
+        characteristic = nil
+        if manager.state == .poweredOn {
             manager.stopAdvertising()
             manager.removeAllServices()
-            if let psm { manager.unpublishL2CAPChannel(psm) }
+            if publishing || psm != nil {
+                // Keep the delegate alive for a late publish/unpublish acknowledgement, even after stop().
+                let deadline = DispatchWorkItem { [self] in
+                    NSLog("PadPaste BLE cleanup timed out (PSM %u)", psm ?? 0)
+                    finishRetirement()
+                }
+                cleanupDeadline = deadline
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: deadline)
+                if let psm { manager.unpublishL2CAPChannel(psm) }
+                return
+            }
         }
+        finishRetirement()
+    }
+
+    private func finishRetirement() {
+        cleanupDeadline?.cancel()
+        cleanupDeadline = nil
         manager?.delegate = nil
         manager = nil
+        publishing = false
+        retiring = false
+        interrupted = false
+        psm = nil
+        startManagerIfNeeded()
+    }
+
+    private func retrySetup(_ message: String, error: Error?) {
+        status(message)
+        NSLog("PadPaste BLE setup: %@ (%@)", message, error?.localizedDescription ?? "no channel")
+        guard retry == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.retry = nil
+            self?.startManagerIfNeeded()
+        }
+        retry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay, execute: work)
+        retryDelay = min(60, retryDelay * 2)
+        retireManager()
     }
 
     private func closeStreams() {
@@ -41,10 +125,15 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
     }
 
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
-        psm = nil
-        characteristic = nil
+        guard manager === peripheral, !retiring else { return }
         switch peripheral.state {
         case .poweredOn:
+            if interrupted || sleeping {
+                retireManager()
+                return
+            }
+            guard !publishing, psm == nil else { return }
+            publishing = true
             status("蓝牙备用 · 正在启动")
             peripheral.publishL2CAPChannel(withEncryption: true)
         case .unauthorized: status("蓝牙备用 · 需要授权")
@@ -53,16 +142,33 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
         default: status("蓝牙备用 · 等待蓝牙")
         }
         if peripheral.state != .poweredOn {
+            interrupted = interrupted || publishing || psm != nil
             closeStreams()
         }
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didPublishL2CAPChannel psm: CBL2CAPPSM, error: Error?) {
-        guard peripheral.state == .poweredOn, error == nil, psm != 0 else {
-            status("蓝牙备用 · 无法开启数据通道")
+        guard peripheral === manager, publishing else { return }
+        publishing = false
+        if error == nil && psm != 0 { self.psm = psm }
+        if retiring {
+            if let channel = self.psm, peripheral.state == .poweredOn {
+                peripheral.unpublishL2CAPChannel(channel)
+            } else {
+                finishRetirement()
+            }
             return
         }
-        self.psm = psm
+        guard peripheral.state == .poweredOn else { return }
+        if interrupted || sleeping {
+            retireManager()
+            return
+        }
+        guard error == nil, psm != 0 else {
+            retrySetup("蓝牙备用 · 无法开启数据通道", error: error)
+            return
+        }
+        NSLog("PadPaste BLE published PSM %u", psm)
         let characteristic = CBMutableCharacteristic(type: Self.channelID, properties: [.read],
                                                        value: nil, permissions: [.readable])
         self.characteristic = characteristic
@@ -71,17 +177,33 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
         peripheral.add(service)
     }
 
+    func peripheralManager(_ peripheral: CBPeripheralManager, didUnpublishL2CAPChannel psm: CBL2CAPPSM, error: Error?) {
+        guard peripheral === manager, retiring, self.psm == psm else { return }
+        if let error { NSLog("PadPaste BLE unpublish PSM %u: %@", psm, error.localizedDescription) }
+        else { NSLog("PadPaste BLE unpublished PSM %u", psm) }
+        finishRetirement()
+    }
+
+    private func serving(_ peripheral: CBPeripheralManager) -> Bool {
+        peripheral === manager && peripheral.state == .poweredOn && !sleeping && !interrupted && !retiring && psm != nil
+    }
+
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        guard peripheral.state == .poweredOn, error == nil else { status("蓝牙备用 · 无法注册服务"); return }
+        guard serving(peripheral) else { return }
+        if let error { retrySetup("蓝牙备用 · 无法注册服务", error: error); return }
         peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [serviceID]])
     }
 
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
-        status(error == nil ? "蓝牙备用 · 可连接" : "蓝牙备用 · 无法广播")
+        guard serving(peripheral) else { return }
+        if let error { retrySetup("蓝牙备用 · 无法广播", error: error); return }
+        retryDelay = 2
+        status("蓝牙备用 · 可连接")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
-        guard request.characteristic.uuid == characteristic?.uuid, let psm else {
+        guard peripheral.state == .poweredOn else { return }
+        guard serving(peripheral), request.characteristic.uuid == characteristic?.uuid, let psm else {
             peripheral.respond(to: request, withResult: .attributeNotFound)
             return
         }
@@ -93,7 +215,7 @@ final class BluetoothLink: NSObject, CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didOpen channel: CBL2CAPChannel?, error: Error?) {
         guard error == nil, let channel else { return }
-        guard streams.count < 4 else {
+        guard serving(peripheral), streams.count < 4 else {
             channel.inputStream.close()
             channel.outputStream.close()
             return

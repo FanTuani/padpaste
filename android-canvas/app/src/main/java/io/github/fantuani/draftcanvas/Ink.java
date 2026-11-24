@@ -100,8 +100,30 @@ public final class Ink {
     public final ArrayList<Stroke> strokes=new ArrayList<>();
     final ArrayList<QuestionImage> questions = new ArrayList<>();
     public final Set<Long> selected=new HashSet<>();
-    private record Edit(List<Stroke> strokes, List<QuestionImage> questions) {}
-    private final ArrayDeque<Edit> undo=new ArrayDeque<>(),redo=new ArrayDeque<>();
+    private interface HistoryEntry {
+        HistoryEntry apply(Ink ink);
+    }
+
+    private record Edit(List<Stroke> strokes, List<QuestionImage> questions) implements HistoryEntry {
+        @Override public HistoryEntry apply(Ink ink) {
+            Edit inverse = ink.snapshot();
+            ink.restore(this);
+            return inverse;
+        }
+    }
+
+    // A normal pen stroke only changes the tail of the stroke list. Keep its immutable
+    // geometry once, including when interleaved with full snapshots for erases and moves.
+    private record PenStroke(Stroke stroke, boolean remove) implements HistoryEntry {
+        @Override public HistoryEntry apply(Ink ink) {
+            if (remove) ink.strokes.remove(ink.strokes.size() - 1);
+            else ink.strokes.add(stroke);
+            ink.revision++;
+            return new PenStroke(stroke, !remove);
+        }
+    }
+
+    private final ArrayDeque<HistoryEntry> undo = new ArrayDeque<>(), redo = new ArrayDeque<>();
     private Edit transaction;
     private List<Stroke> clipboard=Collections.emptyList();
     private List<QuestionImage> questionClipboard=Collections.emptyList();
@@ -118,12 +140,33 @@ public final class Ink {
         revision++;
     }
     public void begin(){if(transaction==null)transaction=snapshot();}
-    public void commit(){if(transaction!=null&&(!transaction.strokes.equals(strokes)||!transaction.questions.equals(questions))){undo.addLast(transaction);while(undo.size()>100)undo.removeFirst();redo.clear();revision++;}transaction=null;}
+    public void commit() {
+        if (transaction != null && (!transaction.strokes.equals(strokes) || !transaction.questions.equals(questions))) {
+            recordUndo(transaction);
+        }
+        transaction = null;
+    }
+    private void recordUndo(HistoryEntry entry) {
+        undo.addLast(entry);
+        if (undo.size() > 100) undo.removeFirst();
+        redo.clear();
+        revision++;
+    }
     public void cancel(){if(transaction!=null){restore(transaction);transaction=null;}}
-    public void add(Stroke s){begin();strokes.add(s);commit();}
+    public void add(Stroke stroke) {
+        strokes.add(stroke);
+        if (transaction != null) commit();
+        else recordUndo(new PenStroke(stroke, true));
+    }
     public boolean canUndo(){return !undo.isEmpty();}public boolean canRedo(){return !redo.isEmpty();}
-    public void undo(){if(!undo.isEmpty()){redo.addLast(snapshot());restore(undo.removeLast());selected.clear();}}
-    public void redo(){if(!redo.isEmpty()){undo.addLast(snapshot());restore(redo.removeLast());selected.clear();}}
+    public void undo() { replay(undo, redo); }
+    public void redo() { replay(redo, undo); }
+    private void replay(ArrayDeque<HistoryEntry> from, ArrayDeque<HistoryEntry> to) {
+        if (transaction != null) commit();
+        if (from.isEmpty()) return;
+        to.addLast(from.removeLast().apply(this));
+        selected.clear();
+    }
     public void select(double l,double t,double r,double b){selected.clear();for(Stroke s:strokes)if(s.crossesRect(l,t,r,b))selected.add(s.id);
         for (QuestionImage image : questions) if (image.x >= l && image.y >= t && image.right() <= r && image.bottom() <= b) selected.add(image.id);
     }
@@ -201,7 +244,12 @@ public final class Ink {
             if(next==null){next=new ArrayList<>(strokes.size());next.addAll(strokes.subList(0,index));}
             erasePadding=Math.max(erasePadding,s.maxWidth);selected.remove(s.id);if(sections.length>0)next.add(new Stroke(nextId(),s,sections));index++;
         }
-        if(next==null)return false;strokes.clear();strokes.addAll(next);revision++;return true;
+        if (next == null) return false;
+        if (transaction == null) recordUndo(snapshot());
+        else revision++;
+        strokes.clear();
+        strokes.addAll(next);
+        return true;
     }
     boolean hasContent() { return !strokes.isEmpty() || !questions.isEmpty(); }
     public void clear(){if(!hasContent())return;begin();strokes.clear();questions.clear();selected.clear();commit();}

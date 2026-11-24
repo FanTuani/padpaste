@@ -412,7 +412,8 @@ private final class QuestionPeer {
             return
         }
         let end = min(image.count, offset + (bluetooth ? 8192 : 65536))
-        writeFrame(Self.questionChunk, image.subdata(in: offset..<end)) { [weak self] in
+        let chunk = image.dropFirst(offset).prefix(end - offset)
+        writeFrame(Self.questionChunk, chunk) { [weak self] in
             guard let self, generation == self.questionGeneration, self.awaiting != nil else { return }
             let now = ProcessInfo.processInfo.systemUptime
             if end == image.count || now - self.lastQuestionReport >= 0.08 {
@@ -441,7 +442,8 @@ private final class QuestionPeer {
     }
 
     private func writeFrame(_ kind: UInt8, _ content: Data = Data(), finish: @escaping () -> Void = {}) {
-        var message = Data([kind])
+        var message = Data(capacity: 1 + content.count)
+        message.append(kind)
         message.append(content)
         guard let payload = try? AES.GCM.seal(message, using: key, authenticating: self.message("mac-frame")).combined
         else { close(); return }
