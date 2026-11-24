@@ -62,11 +62,11 @@ final class FanMenu extends ViewGroup {
         swatch("靛蓝", 0xFF3169CA, activeColor);
         swatch("青绿", TEAL, activeColor);
         command("框选", SELECT, true);
-        command("粗细", SIZE, true);
+        command("粘贴", PASTE_HERE, canPaste);
         command("清空", CLEAR, hasInk);
         command("总览", OVERVIEW, true);
         command("同步", SYNC, true);
-        command("粘贴", PASTE_HERE, canPaste);
+        command("粗细", SIZE, true);
         open();
     }
 
