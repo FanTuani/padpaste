@@ -218,16 +218,62 @@ public final class Ink {
         commit();
     }
 
-    public void paste(double screenWidth,double screenHeight){
-        if(!canPaste())return;double l=Double.POSITIVE_INFINITY,t=l,r=-l,b=-l;
-        for(Stroke s:clipboard){l=Math.min(l,s.left);r=Math.max(r,s.right);t=Math.min(t,s.top);b=Math.max(b,s.bottom);}
-        for(QuestionImage image:questionClipboard){l=Math.min(l,image.x);r=Math.max(r,image.right());t=Math.min(t,image.y);b=Math.max(b,image.bottom());}
-        double dx=24/view.scale,dy=24/view.scale;
-        if(Math.abs((l+r)/2-view.x)>screenWidth/view.scale/2||Math.abs((t+b)/2-view.y)>screenHeight/view.scale/2){dx=view.x-(l+r)/2;dy=view.y-(t+b)/2;}
-        begin();selected.clear();List<Stroke> pasted=new ArrayList<>();for(Stroke s:clipboard){Stroke p=s.offset(nextId(),dx,dy);strokes.add(p);selected.add(p.id);pasted.add(p);}clipboard=pasted;
-        List<QuestionImage> images=new ArrayList<>();
-        for(QuestionImage image:questionClipboard){QuestionImage p=image.offset(nextId(),dx,dy);questions.add(p);selected.add(p.id);images.add(p);}
-        questionClipboard=images;commit();
+    private record Center(double x, double y) {}
+
+    private Center clipboardCenter() {
+        double left = Double.POSITIVE_INFINITY, top = left, right = -left, bottom = -left;
+        for (Stroke stroke : clipboard) {
+            left = Math.min(left, stroke.left);
+            top = Math.min(top, stroke.top);
+            right = Math.max(right, stroke.right);
+            bottom = Math.max(bottom, stroke.bottom);
+        }
+        for (QuestionImage image : questionClipboard) {
+            left = Math.min(left, image.x);
+            top = Math.min(top, image.y);
+            right = Math.max(right, image.right());
+            bottom = Math.max(bottom, image.bottom());
+        }
+        return new Center((left + right) / 2, (top + bottom) / 2);
+    }
+
+    public void paste(double screenWidth, double screenHeight) {
+        if (!canPaste()) return;
+        Center center = clipboardCenter();
+        if (Math.abs(center.x - view.x) > screenWidth / view.scale / 2
+                || Math.abs(center.y - view.y) > screenHeight / view.scale / 2) {
+            pasteOffset(view.x - center.x, view.y - center.y);
+        } else {
+            pasteOffset(24 / view.scale, 24 / view.scale);
+        }
+    }
+
+    void pasteAt(double worldX, double worldY) {
+        if (!canPaste()) return;
+        Center center = clipboardCenter();
+        pasteOffset(worldX - center.x, worldY - center.y);
+    }
+
+    private void pasteOffset(double dx, double dy) {
+        begin();
+        selected.clear();
+        List<Stroke> pastedStrokes = new ArrayList<>(clipboard.size());
+        for (Stroke stroke : clipboard) {
+            Stroke copy = stroke.offset(nextId(), dx, dy);
+            strokes.add(copy);
+            selected.add(copy.id);
+            pastedStrokes.add(copy);
+        }
+        clipboard = pastedStrokes;
+        List<QuestionImage> pastedImages = new ArrayList<>(questionClipboard.size());
+        for (QuestionImage image : questionClipboard) {
+            QuestionImage copy = image.offset(nextId(), dx, dy);
+            questions.add(copy);
+            selected.add(copy.id);
+            pastedImages.add(copy);
+        }
+        questionClipboard = pastedImages;
+        commit();
     }
     public void deleteSelected(){if(selected.isEmpty())return;begin();strokes.removeIf(s->selected.contains(s.id));questions.removeIf(image->selected.contains(image.id));selected.clear();commit();}
     double erasePadding;

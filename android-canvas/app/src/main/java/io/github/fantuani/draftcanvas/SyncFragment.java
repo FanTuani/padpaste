@@ -1,6 +1,7 @@
 package io.github.fantuani.draftcanvas;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.Fragment;
 import android.bluetooth.BluetoothAdapter;
@@ -10,21 +11,31 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.InputType;
+import android.transition.AutoTransition;
+import android.transition.TransitionManager;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
+import android.view.animation.PathInterpolator;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
@@ -42,20 +53,27 @@ public final class SyncFragment extends Fragment {
     private static final int PICK_PAIRING = 630;
     private static final int STORAGE_PERMISSION = 103;
     private static final int BLUETOOTH_PERMISSION = 104;
-    private static final int INK = 0xFF243137;
-    private static final int MUTED = 0xFF596663;
-    private static final int TEAL = 0xFF167B70;
+    private static final int PAPER = 0xFFFAF9F5;
+    private static final int INK = 0xFF23312C;
+    private static final int MUTED = 0xFF586760;
+    private static final int LINE = 0xFFDBE0D9;
+    private static final int GREEN = 0xFF206452;
+    private static final int OFF = 0xFFB7BFB9;
+    private static final PathInterpolator EASE = new PathInterpolator(.2f, .8f, .25f, 1);
 
     private MainActivity activity;
     private DuplexSync link;
     private SharedPreferences preferences;
-    private TextView connection, address, receiveStatus, sendStatus;
+    private TextView connection, route, address, detail, bluetoothStatus, settingsToggle;
+    private View dot;
     private Switch receive, send, bluetooth;
-    private TextView bluetoothStatus;
-    private Button reconnect, grant;
-    private LinearLayout pairing;
+    private Button nextStep, grant, reconnect, editPairing;
+    private LinearLayout content, settings, pairing;
+    private ImageView chevron;
     private EditText pairingCode;
-    private boolean updating;
+    private ScrollView scroll;
+    private boolean expanded, editingPairing, updating;
+
     private final BroadcastReceiver changes = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { render(); }
     };
@@ -64,56 +82,128 @@ public final class SyncFragment extends Fragment {
         activity = (MainActivity) getActivity();
         link = DuplexSync.get(activity);
         preferences = QuestionInbox.preferences(activity);
+        expanded = state != null && state.getBoolean("expanded");
+        editingPairing = state != null && state.getBoolean("editingPairing");
 
-        ScrollView scroll = new ScrollView(activity);
+        scroll = new ScrollView(activity);
+        scroll.setId(R.id.sync_scroll);
+        scroll.setBackgroundColor(PAPER);
         scroll.setFillViewport(true);
         FrameLayout center = new FrameLayout(activity);
-        scroll.addView(center, new ScrollView.LayoutParams(-1, -2));
-        LinearLayout content = column();
-        content.setPadding(dp(24), dp(16), dp(24), dp(32));
-        center.addView(content, new FrameLayout.LayoutParams(
-                Math.min(dp(600), getResources().getDisplayMetrics().widthPixels), -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+        scroll.addView(center);
+        content = new LinearLayout(activity) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int width = Math.min(MeasureSpec.getSize(widthSpec), dp(518));
+                super.onMeasure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), heightSpec);
+            }
+        };
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24), dp(20), dp(24), dp(32));
+        content.setFocusableInTouchMode(true);
+        center.addView(content, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
-        Button back = button("‹  返回草稿", activity::onBackPressed);
-        content.addView(back, new LinearLayout.LayoutParams(-2, -2));
-        TextView title = label("同步", 32, INK);
-        title.setTypeface(null, Typeface.BOLD);
-        content.addView(title);
+        LinearLayout header = row();
+        content.addView(header);
+        ImageButton back = new ImageButton(activity, null, android.R.attr.borderlessButtonStyle);
+        back.setImageResource(R.drawable.ic_sync_back);
+        back.setContentDescription("返回草稿");
+        back.setOnClickListener(v -> activity.onBackPressed());
+        header.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView title = label("同步", 15, MUTED);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        if (Build.VERSION.SDK_INT >= 28) title.setAccessibilityHeading(true);
+        header.addView(title);
 
-        LinearLayout status = card(content);
-        status.addView(label("连接状态", 14, MUTED));
-        connection = label("", 23, INK);
-        connection.setTypeface(null, Typeface.BOLD);
-        status.addView(connection);
-        address = label("", 14, MUTED);
-        status.addView(address);
-
-        LinearLayout directions = card(content);
-        receiveStatus = label("", 13, MUTED);
-        receive = direction(directions, "Mac 剪贴板 → 草稿纸", receiveStatus);
+        buildStatus();
+        divider(content);
+        receive = direction(content, "接收 Mac 题图", R.drawable.ic_sync_receive);
         receive.setOnCheckedChangeListener((view, enabled) -> {
             if (updating) return;
             preferences.edit().putBoolean(QuestionInbox.RECEIVE_ENABLED, enabled).apply();
             activity.receiveSettingChanged();
             render();
         });
-        sendStatus = label("", 13, MUTED);
-        send = direction(directions, "平板截图 → Mac 剪贴板", sendStatus);
+        divider(content);
+        send = direction(content, "发送平板截图到 Mac", R.drawable.ic_sync_send);
         send.setOnCheckedChangeListener((view, enabled) -> {
             if (updating) return;
             SyncService.setEnabled(activity, enabled);
             render();
             if (enabled && !SyncService.filesAllowed(activity)) requestStorage();
         });
-        grant = button("授予文件访问权限", this::requestStorage);
-        directions.addView(grant, new LinearLayout.LayoutParams(-2, -2));
+        grant = button("授予截图文件访问权限", this::requestStorage);
+        content.addView(grant, new LinearLayout.LayoutParams(-2, -2));
+        divider(content);
+        buildSettings();
+        render();
+        return scroll;
+    }
 
-        LinearLayout configuration = card(content);
-        configuration.addView(label("连接配置", 16, INK));
-        configuration.addView(label("从 Mac 的 PadPaste 菜单获取同步配对码或配对文件。", 14, MUTED));
+    private void buildStatus() {
+        LinearLayout summary = row();
+        LinearLayout.LayoutParams margins = new LinearLayout.LayoutParams(-1, -2);
+        margins.topMargin = dp(20);
+        margins.bottomMargin = dp(24);
+        content.addView(summary, margins);
+        ImageView laptop = icon(R.drawable.ic_sync_laptop);
+        GradientDrawable outline = rounded(PAPER, 13);
+        outline.setStroke(dp(1), LINE);
+        laptop.setBackground(outline);
+        laptop.setScaleType(ImageView.ScaleType.CENTER);
+        summary.addView(laptop, new LinearLayout.LayoutParams(dp(46), dp(46)));
+        LinearLayout labels = column();
+        LinearLayout.LayoutParams besideIcon = new LinearLayout.LayoutParams(0, -2, 1);
+        besideIcon.setMarginStart(dp(16));
+        summary.addView(labels, besideIcon);
+        connection = label("", 26, INK);
+        connection.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        connection.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        labels.addView(connection);
+        LinearLayout channel = row();
+        labels.addView(channel);
+        dot = new View(activity);
+        dot.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams dotLayout = new LinearLayout.LayoutParams(dp(7), dp(7));
+        dotLayout.setMarginEnd(dp(7));
+        channel.addView(dot, dotLayout);
+        route = label("", 13, MUTED);
+        channel.addView(route);
+        nextStep = button("", () -> {
+            if (link.paired()) reconnect();
+            else {
+                showSettings(true, true);
+                showPairing(true);
+                revealPairing();
+            }
+        });
+        content.addView(nextStep, new LinearLayout.LayoutParams(-2, -2));
+    }
+
+    private void buildSettings() {
+        FrameLayout disclosure = new FrameLayout(activity);
+        content.addView(disclosure);
+        settingsToggle = label("连接设置", 14, MUTED);
+        settingsToggle.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_sync_settings, 0, 0, 0);
+        settingsToggle.setCompoundDrawablePadding(dp(12));
+        settingsToggle.setPaddingRelative(0, 0, dp(30), 0);
+        settingsToggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        settingsToggle.setMinHeight(dp(60));
+        settingsToggle.setFocusable(true);
+        TypedValue ripple = new TypedValue();
+        activity.getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
+        settingsToggle.setBackgroundResource(ripple.resourceId);
+        settingsToggle.setOnClickListener(v -> showSettings(!expanded, true));
+        disclosure.addView(settingsToggle, new FrameLayout.LayoutParams(-1, -2));
+        chevron = icon(R.drawable.ic_sync_chevron);
+        disclosure.addView(chevron, new FrameLayout.LayoutParams(dp(18), dp(18), Gravity.END | Gravity.CENTER_VERTICAL));
+        settings = column();
+        settings.setPaddingRelative(dp(30), 0, 0, dp(8));
+        content.addView(settings);
+
         if (Build.VERSION.SDK_INT >= 31) {
+            bluetooth = direction(settings, "蓝牙备用", 0);
             bluetoothStatus = label("", 13, MUTED);
-            bluetooth = direction(configuration, "蓝牙备用", bluetoothStatus);
+            settings.addView(bluetoothStatus);
             bluetooth.setOnCheckedChangeListener((view, enabled) -> {
                 if (updating) return;
                 if (enabled && !link.bluetoothAllowed()) {
@@ -125,29 +215,41 @@ public final class SyncFragment extends Fragment {
                 setBluetoothEnabled(enabled);
             });
         }
-        LinearLayout controls = new LinearLayout(activity);
-        configuration.addView(controls);
-        Button edit = button("输入配对码", this::togglePairing);
-        controls.addView(edit, new LinearLayout.LayoutParams(0, -2, 1));
-        controls.addView(button("导入配对文件", this::pickPairing), new LinearLayout.LayoutParams(0, -2, 1));
+        detail = label("", 13, MUTED);
+        detail.setPadding(0, dp(12), 0, 0);
+        settings.addView(detail);
+        address = label("", 13, MUTED);
+        address.setTextIsSelectable(true);
+        settings.addView(address);
+        reconnect = button("重新连接", this::reconnect);
+        settings.addView(reconnect, new LinearLayout.LayoutParams(-2, -2));
+        editPairing = button("", () -> {
+            showPairing(!editingPairing);
+            if (editingPairing) revealPairing();
+        });
+        settings.addView(editPairing, new LinearLayout.LayoutParams(-2, -2));
+
         pairing = column();
-        pairing.setVisibility(View.GONE);
-        configuration.addView(pairing);
+        settings.addView(pairing);
+        pairing.addView(label("在 Mac 的 PadPaste 菜单复制配对码，或导出配对文件。", 14, MUTED));
         pairingCode = new EditText(activity);
+        pairingCode.setId(R.id.sync_pairing_code);
         pairingCode.setHint("粘贴配对码");
         pairingCode.setSingleLine(true);
         pairingCode.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        pairingCode.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         pairing.addView(pairingCode, new LinearLayout.LayoutParams(-1, -2));
         pairing.addView(button("保存配对", () -> pair(pairingCode.getText().toString())),
                 new LinearLayout.LayoutParams(-2, -2));
-        reconnect = button("重新连接", () -> {
-            link.reconnect();
-            SyncService.resumeMonitoring(activity);
-            render();
-        });
-        configuration.addView(reconnect, new LinearLayout.LayoutParams(-2, -2));
-        render();
-        return scroll;
+        pairing.addView(button("导入配对文件", this::pickPairing), new LinearLayout.LayoutParams(-2, -2));
+        showSettings(expanded, false);
+        showPairing(editingPairing);
+    }
+
+    @Override public void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putBoolean("expanded", expanded);
+        state.putBoolean("editingPairing", editingPairing);
     }
 
     @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
@@ -188,27 +290,95 @@ public final class SyncFragment extends Fragment {
         }
         updating = false;
 
-        if (bluetoothStatus != null) {
-            bluetoothStatus.setText(link.connectedViaBluetooth() ? "正在使用蓝牙"
-                    : !link.bluetoothEnabled() ? "Wi-Fi 不可用时接管，需要在 Mac 上一并开启"
-                    : !link.bluetoothAllowed() ? "需要附近设备权限"
-                    : !link.bluetoothRadioOn() ? "蓝牙已关闭" : "Wi-Fi 优先 · 蓝牙已待命");
+        boolean viaBluetooth = connected && link.connectedViaBluetooth();
+        String status = paused ? "同步已暂停" : !paired ? "尚未配对 Mac"
+                : connected ? "已连接 Mac" : "等待 Mac 连接";
+        String channel;
+        if (paused) channel = "收发均已关闭";
+        else if (!paired) channel = "配对后即可同步截图";
+        else if (!connected) channel = "正在寻找已配对的 Mac";
+        else if (viaBluetooth) channel = "通过蓝牙";
+        else channel = link.duplex() ? "通过 Wi-Fi" : "通过 Wi-Fi · 旧版 Mac";
+        if (!channel.contentEquals(route.getText()) || !status.contentEquals(connection.getText())) {
+            if (route.isLaidOut() && ValueAnimator.areAnimatorsEnabled()) {
+                route.animate().cancel();
+                route.setAlpha(.45f);
+                route.setTranslationY(dp(2));
+                route.animate().alpha(1).translationY(0).setDuration(180).setInterpolator(EASE).start();
+            }
+            connection.setText(status);
+            route.setText(channel);
+            dot.setBackground(rounded(connected && paired && !paused ? GREEN : OFF, 4));
         }
 
-        connection.setText(!paired ? "尚未配对" : paused ? "同步已暂停"
-                : connected ? (link.connectedViaBluetooth() ? "已连接 Mac · 蓝牙"
-                    : link.duplex() ? "已连接 Mac · Wi-Fi" : "已连接 · 旧版 Mac") : "等待 Mac 连接");
-        connection.setTextColor(connected && !paused ? TEAL : INK);
-        String endpoint = link.connectedAddress();
-        address.setText(endpoint);
-        address.setVisibility(!paused && !endpoint.isEmpty() ? View.VISIBLE : View.GONE);
-
-        receiveStatus.setText(!receiving ? "已关闭" : !paired ? "配对后可接收"
-                : connected ? "草稿纸在前台时接收" : "等待连接");
-        sendStatus.setText(!sending ? "已关闭" : !allowed ? "需要文件访问权限"
-                : SyncService.monitorStatus());
+        boolean needsReconnect = paired && !paused && !connected;
+        nextStep.setText(paired ? "重新连接" : "配对 Mac");
+        nextStep.setVisibility(!paused && (!paired || !connected) ? View.VISIBLE : View.GONE);
+        boolean canConnect = receiving || (sending && allowed);
+        nextStep.setEnabled(!paired || canConnect);
         grant.setVisibility(sending && !allowed ? View.VISIBLE : View.GONE);
-        reconnect.setEnabled(paired && (receiving || sending && allowed));
+        if (bluetoothStatus != null) {
+            bluetoothStatus.setText(viaBluetooth ? "已通过蓝牙连接，Wi-Fi 恢复后优先使用 Wi-Fi。"
+                    : !link.bluetoothEnabled() ? "Wi-Fi 不可用时可通过蓝牙连接。Mac 上也需开启蓝牙备用。"
+                    : !link.bluetoothAllowed() ? "需要附近设备权限"
+                    : !link.bluetoothRadioOn() ? "系统蓝牙已关闭" : "Wi-Fi 不可用时尝试蓝牙连接。");
+        }
+        detail.setText("接收题图 · " + (!receiving ? "已关闭" : !paired ? "等待配对" : "草稿纸在前台时接收")
+                + "\n发送截图 · " + (!sending ? "已关闭" : !allowed ? "需要文件访问权限"
+                    : !paired ? "等待配对" : SyncService.monitorStatus()));
+        String endpoint = link.connectedAddress();
+        address.setText(endpoint.isEmpty() ? "" : "连接地址 · " + endpoint);
+        address.setVisibility(!paused && !endpoint.isEmpty() ? View.VISIBLE : View.GONE);
+        reconnect.setVisibility(paired && !needsReconnect ? View.VISIBLE : View.GONE);
+        reconnect.setEnabled(canConnect);
+        editPairing.setText(editingPairing ? "收起配对" : paired ? "更换配对" : "配对 Mac");
+    }
+
+    private void reconnect() {
+        link.reconnect();
+        SyncService.resumeMonitoring(activity);
+        render();
+    }
+
+    private void showSettings(boolean show, boolean animate) {
+        expanded = show;
+        boolean motion = animate && content.isLaidOut() && ValueAnimator.areAnimatorsEnabled();
+        if (motion && (settings.getVisibility() == View.VISIBLE) != show) {
+            TransitionManager.beginDelayedTransition(content,
+                    new AutoTransition().setDuration(135).setInterpolator(EASE));
+        }
+        if (!show && pairingCode.hasFocus()) hideKeyboard();
+        settings.setVisibility(show ? View.VISIBLE : View.GONE);
+        chevron.animate().cancel();
+        if (motion) chevron.animate().rotation(show ? 90 : 0).setDuration(180).setInterpolator(EASE).start();
+        else chevron.setRotation(show ? 90 : 0);
+        settingsToggle.setContentDescription(show ? "连接设置，已展开" : "连接设置，已收起");
+    }
+
+    private void showPairing(boolean show) {
+        editingPairing = show;
+        if (!show && pairingCode.hasFocus()) hideKeyboard();
+        pairing.setVisibility(show ? View.VISIBLE : View.GONE);
+        editPairing.setText(show ? "收起配对" : link.paired() ? "更换配对" : "配对 Mac");
+    }
+
+    private void revealPairing() {
+        pairing.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+            @Override public boolean onPreDraw() {
+                pairing.getViewTreeObserver().removeOnPreDrawListener(this);
+                if (expanded && editingPairing) {
+                    Rect bounds = new Rect();
+                    pairing.getDrawingRect(bounds);
+                    pairing.requestRectangleOnScreen(bounds, !ValueAnimator.areAnimatorsEnabled());
+                }
+                return true;
+            }
+        });
+    }
+
+    private void hideKeyboard() {
+        activity.getSystemService(InputMethodManager.class).hideSoftInputFromWindow(pairingCode.getWindowToken(), 0);
+        content.requestFocus();
     }
 
     private void setBluetoothEnabled(boolean enabled) {
@@ -267,18 +437,6 @@ public final class SyncFragment extends Fragment {
         }
     }
 
-    private void togglePairing() {
-        if (pairing.isShown()) closePairing();
-        else pairing.setVisibility(View.VISIBLE);
-    }
-
-    private void closePairing() {
-        activity.getSystemService(InputMethodManager.class)
-                .hideSoftInputFromWindow(pairingCode.getWindowToken(), 0);
-        pairingCode.setText("");
-        pairing.setVisibility(View.GONE);
-    }
-
     private void pair(String code) {
         try {
             link.pair(code);
@@ -286,7 +444,10 @@ public final class SyncFragment extends Fragment {
             message("无法读取配对码");
             return;
         }
-        closePairing();
+        pairingCode.setText("");
+        showPairing(false);
+        showSettings(false, true);
+        scroll.scrollTo(0, 0);
         SyncService.resumeMonitoring(activity);
         render();
         message("配对已保存");
@@ -295,29 +456,58 @@ public final class SyncFragment extends Fragment {
     private void message(String text) { Toast.makeText(activity, text, Toast.LENGTH_SHORT).show(); }
 
     @android.annotation.SuppressLint("UseSwitchCompatOrMaterialCode")
-    private Switch direction(LinearLayout group, String text, TextView detail) {
+    private Switch direction(LinearLayout group, String text, int icon) {
         Switch toggle = new Switch(activity);
         toggle.setText(text);
-        toggle.setTextSize(16);
+        toggle.setTextSize(icon == 0 ? 14 : 16);
         toggle.setTextColor(INK);
-        toggle.setMinHeight(dp(48));
+        toggle.setMinHeight(dp(icon == 0 ? 48 : 60));
+        toggle.setSwitchPadding(dp(12));
+        toggle.setSwitchMinWidth(dp(40));
+        toggle.setSplitTrack(false);
+        toggle.setShowText(false);
+        GradientDrawable track = rounded(OFF, 12);
+        track.setSize(dp(40), dp(22));
+        toggle.setTrackDrawable(track);
+        toggle.setTrackTintList(new ColorStateList(new int[][]{
+                {android.R.attr.state_checked}, {}}, new int[]{GREEN, OFF}));
+        GradientDrawable thumb = rounded(0xFFFFFFFF, 9);
+        thumb.setSize(dp(18), dp(18));
+        toggle.setThumbDrawable(new InsetDrawable(thumb, dp(2)));
+        toggle.setThumbTintList(ColorStateList.valueOf(0xFFFFFFFF));
+        if (icon != 0) {
+            toggle.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+            toggle.setCompoundDrawablePadding(dp(12));
+        }
         group.addView(toggle, new LinearLayout.LayoutParams(-1, -2));
-        group.addView(detail);
         return toggle;
     }
 
-    private LinearLayout card(LinearLayout parent) {
-        LinearLayout card = column();
-        card.setPadding(dp(18), dp(14), dp(18), dp(14));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(0xFFFFFFFF);
-        background.setCornerRadius(dp(16));
-        background.setStroke(dp(1), 0xFFE4EAE6);
-        card.setBackground(background);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.topMargin = dp(12);
-        parent.addView(card, params);
-        return card;
+    private void divider(LinearLayout parent) {
+        View line = new View(activity);
+        line.setBackgroundColor(LINE);
+        line.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        parent.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
+    }
+
+    private GradientDrawable rounded(int color, int radius) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(radius));
+        return drawable;
+    }
+
+    private ImageView icon(int resource) {
+        ImageView view = new ImageView(activity);
+        view.setImageResource(resource);
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return view;
+    }
+
+    private LinearLayout row() {
+        LinearLayout view = new LinearLayout(activity);
+        view.setGravity(Gravity.CENTER_VERTICAL);
+        return view;
     }
 
     private LinearLayout column() {
@@ -338,6 +528,9 @@ public final class SyncFragment extends Fragment {
         Button view = new Button(activity, null, android.R.attr.borderlessButtonStyle);
         view.setText(text);
         view.setAllCaps(false);
+        view.setTextColor(new ColorStateList(new int[][]{{-android.R.attr.state_enabled}, {}},
+                new int[]{MUTED, GREEN}));
+        view.setMinHeight(dp(48));
         view.setOnClickListener(v -> action.run());
         return view;
     }

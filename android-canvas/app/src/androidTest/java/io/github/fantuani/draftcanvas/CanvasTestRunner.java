@@ -270,6 +270,17 @@ public final class CanvasTestRunner extends Instrumentation {
         document.deleteQuestion(pasted);
         check(document.questions.size() == 1 && document.strokes.size() == 2,
                 "deleting a selected image must preserve the ink");
+
+        view.pasteAt(-260, 85);
+        QuestionImage anchored = view.selectedQuestion();
+        check(anchored != null && anchored.x + anchored.width / 2 == -260
+                        && anchored.y + anchored.height / 2 == 85 && !view.hasSelectionBox(),
+                "tool paste must select a single photo at its world anchor");
+        document.selected.add(document.strokes.get(0).id);
+        document.copy();
+        view.pasteAt(70, -100);
+        check(view.selectedQuestion() == null && view.hasSelectionBox() && document.strokes.size() == 3,
+                "tool paste of ink must replace a stale photo selection with a lasso");
     }
 
     private void checkPendingQuestionResize() {

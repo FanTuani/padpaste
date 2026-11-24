@@ -222,14 +222,23 @@ public final class CanvasView extends View {
         boolean fromPhoto = selectedQuestion() != null;
         if (fromPhoto ? !ink.canPasteQuestions() : !ink.canPaste()) return;
         ink.paste(getWidth(), getHeight());
-        if (fromPhoto && ink.selected.size() == 1) {
+        showPastedSelection(fromPhoto);
+    }
+
+    void pasteAt(double worldX, double worldY) {
+        if (!ink.canPaste()) return;
+        ink.pasteAt(worldX, worldY);
+        showPastedSelection(ink.canPasteQuestions());
+    }
+
+    private void showPastedSelection(boolean preferPhoto) {
+        if (preferPhoto && ink.selected.size() == 1) {
             selectQuestion(ink.question(ink.selected.iterator().next()));
-            refresh();
-            return;
+        } else {
+            selectQuestion(null);
+            double[] bounds = ink.selectionBounds();
+            selectionBox = Lasso.rectangle(bounds[0], bounds[1], bounds[2], bounds[3]);
         }
-        if (fromPhoto) selectQuestion(null);
-        double[] bounds = ink.selectionBounds();
-        selectionBox = Lasso.rectangle(bounds[0], bounds[1], bounds[2], bounds[3]);
         refresh();
     }
 

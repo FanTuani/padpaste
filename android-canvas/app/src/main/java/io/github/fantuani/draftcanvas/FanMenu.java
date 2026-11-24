@@ -21,8 +21,9 @@ import android.widget.TextView;
 
 final class FanMenu extends ViewGroup {
     static final int SIZE = 1, CLEAR = 2, COPY = 3, PASTE = 4, DELETE = 5, CANCEL = 6, SELECT = 7, OVERVIEW = 8, SYNC = 9;
+    static final int PASTE_HERE = 10;
     private static final int INK = 0xFF243137, TEAL = 0xFF167B70, RED = 0xFFAA5148;
-    private static final float[] TOOLS = {-178, -149, -120, -91, 151, 114, 66, 29, -2};
+    private static final float[] TOOLS = {-178, -149, -120, -91, 151, 114, 66, 29, -2, -46};
     private static final float[] SELECTION = {-165, -126, -87, -48};
     private static final PathInterpolator OPEN = new PathInterpolator(.18f, .76f, .22f, 1f);
     private static final PathInterpolator CLOSE = new PathInterpolator(.36f, 0f, .72f, .54f);
@@ -54,7 +55,7 @@ final class FanMenu extends ViewGroup {
 
     boolean isOpen() { return shown && !closing; }
 
-    void showTools(float x, float y, int activeColor, boolean hasInk) {
+    void showTools(float x, float y, int activeColor, boolean hasInk, boolean canPaste) {
         prepare(x, y, false);
         swatch("墨黑", CanvasView.DEFAULT_PEN_COLOR, activeColor);
         swatch("朱红", 0xFFCF4941, activeColor);
@@ -65,6 +66,7 @@ final class FanMenu extends ViewGroup {
         command("清空", CLEAR, hasInk);
         command("总览", OVERVIEW, true);
         command("同步", SYNC, true);
+        command("粘贴", PASTE_HERE, canPaste);
         open();
     }
 
@@ -313,7 +315,7 @@ final class FanMenu extends ViewGroup {
         else {
             band(canvas, -178, 87);
             band(canvas, 114, 37);
-            band(canvas, -2, 68);
+            band(canvas, -46, 112);
         }
         canvas.restore();
         if (confirmation != null && morph > 0) {
@@ -469,6 +471,7 @@ final class FanMenu extends ViewGroup {
                     canvas.drawRoundRect(-3, -4, 7, 7, 1.5f, 1.5f, ink);
                     canvas.drawLines(new float[]{-6, 4, -7, 4, -7, 4, -7, -7, -7, -7, 3, -7}, ink);
                     break;
+                case PASTE_HERE:
                 case PASTE:
                     canvas.drawRoundRect(-6, -6, 6, 7, 1.5f, 1.5f, ink);
                     canvas.drawRoundRect(-3, -8, 3, -4, 1.2f, 1.2f, ink);

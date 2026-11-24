@@ -23,6 +23,7 @@ public final class MainActivity extends Activity {
     private SharedPreferences toolSizes;
     private FanMenu menu;
     private long menuQuestionId;
+    private double menuPasteX, menuPasteY;
     private TextView zoom;
     private double shownScale = Double.NaN;
     private PenButtons penButtons;
@@ -132,7 +133,9 @@ public final class MainActivity extends Activity {
                 PointF anchor = canvas.menuAnchor();
                 canvas.finishContactForMenu();
                 menuQuestionId = 0;
-                menu.showTools(anchor.x, anchor.y, canvas.color, !ink.strokes.isEmpty());
+                menuPasteX = ink.view.worldX(anchor.x, canvas.getWidth());
+                menuPasteY = ink.view.worldY(anchor.y, canvas.getHeight());
+                menu.showTools(anchor.x, anchor.y, canvas.color, !ink.strokes.isEmpty(), ink.canPaste());
             }
             @Override public void beginSelection() {
                 menu.dismiss(false);
@@ -229,6 +232,9 @@ public final class MainActivity extends Activity {
                 break;
             case FanMenu.PASTE:
                 canvas.pasteSelection();
+                break;
+            case FanMenu.PASTE_HERE:
+                canvas.pasteAt(menuPasteX, menuPasteY);
                 break;
             case FanMenu.DELETE:
                 ink.deleteSelected();
